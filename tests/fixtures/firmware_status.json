@@ -1,0 +1,6 @@
+{
+  "result": 0,
+  "msg": "operate successfully",
+  "obj": null,
+  "_comment": "Note: This charger model returns null for firmware status. Some chargers may return actual data like: {\"updateAvailable\": true, \"currentVersion\": \"1.2.2\"}"
+}

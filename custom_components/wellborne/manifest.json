@@ -1,0 +1,13 @@
+{
+  "domain": "wellborne",
+  "name": "Wellborne EV Charger",
+  "codeowners": ["@temp-droid"],
+  "config_flow": true,
+  "documentation": "https://github.com/temp-droid/ha-wellborne",
+  "integration_type": "hub",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/temp-droid/ha-wellborne/issues",
+  "loggers": ["custom_components.wellborne"],
+  "requirements": [],
+  "version": "0.1.0"
+}

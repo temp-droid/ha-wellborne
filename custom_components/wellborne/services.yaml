@@ -1,0 +1,71 @@
+# BREAKING CHANGE: 'device_id' parameter has been renamed to 'charger_id'
+# Update your automations accordingly
+
+start_charging:
+  name: Start Charging
+  description: Start a charging session on the specified charger
+  fields:
+    charger_id:
+      name: Charger ID
+      description: The charger ID to start charging on
+      required: true
+      example: "CHARGER123"
+      selector:
+        text:
+
+stop_charging:
+  name: Stop Charging
+  description: Stop the current charging session on the specified charger
+  fields:
+    charger_id:
+      name: Charger ID
+      description: The charger ID to stop charging on
+      required: true
+      example: "CHARGER123"
+      selector:
+        text:
+
+set_max_current:
+  name: Set Maximum Current
+  description: Set the maximum charging current in Amperes
+  fields:
+    charger_id:
+      name: Charger ID
+      description: The charger ID to configure
+      required: true
+      example: "CHARGER123"
+      selector:
+        text:
+    current:
+      name: Current
+      description: Maximum current in Amperes (6-32A)
+      required: true
+      example: 16
+      selector:
+        number:
+          min: 6
+          max: 32
+          unit_of_measurement: A
+
+set_solar_mode:
+  name: Set Solar Mode
+  description: Set the solar charging mode
+  fields:
+    charger_id:
+      name: Charger ID
+      description: The charger ID to configure
+      required: true
+      example: "CHARGER123"
+      selector:
+        text:
+    mode:
+      name: Mode
+      description: The solar charging mode
+      required: true
+      example: "eco"
+      selector:
+        select:
+          options:
+            - "off"
+            - "eco"
+            - "pure_solar"

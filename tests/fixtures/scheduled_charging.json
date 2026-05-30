@@ -1,0 +1,20 @@
+{
+  "result": 0,
+  "msg": "operate successfully",
+  "obj": {
+    "id": 203,
+    "type": null,
+    "cycle": null,
+    "userId": 0,
+    "chargerId": "TEST0000001",
+    "connectorId": 1,
+    "expiryDate": null,
+    "status": 2,
+    "data": null,
+    "chargeTimeType": 0,
+    "expiryDateType": 0,
+    "endTime": null,
+    "costUnit": "€",
+    "cycleTime": null
+  }
+}

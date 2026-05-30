@@ -1,0 +1,373 @@
+[build-system]
+requires = ["setuptools>=65.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wellborne"
+version = "0.1.0"
+description = "Home Assistant custom integration for Wellborne/ATESS EV chargers"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "temp-droid" }
+]
+requires-python = ">=3.13.2"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Home Automation",
+]
+dependencies = [
+    "homeassistant>=2025.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.8.0",
+    "pyright>=1.1.390",
+    "pre-commit>=4.0.0",
+]
+test = [
+    "pytest>=8.0.0",
+    "pytest-homeassistant-custom-component>=0.13.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+    "pytest-timeout>=2.3.0",
+    "aioresponses>=0.7.6",
+    "syrupy>=4.0.0",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/temp-droid/ha-wellborne"
+"Bug Tracker" = "https://github.com/temp-droid/ha-wellborne/issues"
+"Documentation" = "https://github.com/temp-droid/ha-wellborne#readme"
+
+[tool.setuptools]
+packages = ["custom_components.wellborne"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+"custom_components.wellborne" = ["*.json", "*.yaml", "translations/*.json"]
+
+# =============================================================================
+# PYRIGHT - Type Checking
+# =============================================================================
+[tool.pyright]
+pythonVersion = "3.13"
+pythonPlatform = "All"
+typeCheckingMode = "basic"
+include = ["custom_components/wellborne"]
+exclude = [
+    "**/node_modules",
+    "**/__pycache__",
+    "**/.git",
+    "**/.github",
+    "**/docs",
+    "**/.venv",
+    "**/config",
+    "**/tests",
+]
+reportUnusedImport = "none"
+reportUnusedVariable = "none"
+reportMissingTypeStubs = "none"
+reportPrivateUsage = "none"
+
+# =============================================================================
+# PYTEST - Testing
+# =============================================================================
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = [".git", ".venv", "config", "__pycache__"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+log_cli = true
+log_cli_level = "DEBUG"
+log_format = "%(asctime)s.%(msecs)03d %(levelname)-8s %(name)s: %(message)s"
+log_date_format = "%Y-%m-%d %H:%M:%S"
+addopts = [
+    "-ra",
+    "-q",
+    "--strict-markers",
+    "--tb=short",
+]
+markers = [
+    "unit: Unit tests (fast, no external dependencies)",
+    "integration: Integration tests (may use coordinator/HA services)",
+]
+filterwarnings = [
+    "error",
+    "ignore::DeprecationWarning:homeassistant.*:",
+    "ignore::pytest.PytestUnraisableExceptionWarning",
+]
+
+# =============================================================================
+# COVERAGE - Code Coverage
+# =============================================================================
+[tool.coverage.run]
+source = ["custom_components/wellborne"]
+omit = [
+    "tests/*",
+    "*/__pycache__/*",
+]
+branch = true
+parallel = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "def __str__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+    "@overload",
+    "@abstractmethod",
+]
+fail_under = 80
+show_missing = true
+skip_covered = false
+
+[tool.coverage.html]
+directory = "htmlcov"
+
+# =============================================================================
+# RUFF - Linting and Formatting
+# =============================================================================
+[tool.ruff]
+required-version = ">=0.8.0"
+target-version = "py313"
+line-length = 120
+indent-width = 4
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+docstring-code-format = true
+docstring-code-line-length = "dynamic"
+
+[tool.ruff.lint]
+select = [
+    # Pyflakes
+    "F",
+    # pycodestyle
+    "E",
+    "W",
+    # isort
+    "I",
+    # pep8-naming
+    "N",
+    # pydocstyle
+    "D",
+    # pyupgrade
+    "UP",
+    # flake8-async
+    "ASYNC",
+    # flake8-bandit (security)
+    "S",
+    # flake8-bugbear
+    "B",
+    # flake8-builtins
+    "A",
+    # flake8-commas
+    "COM",
+    # flake8-comprehensions
+    "C4",
+    # flake8-datetimez
+    "DTZ",
+    # flake8-errmsg
+    "EM",
+    # flake8-executable
+    "EXE",
+    # flake8-implicit-str-concat
+    "ISC",
+    # flake8-import-conventions
+    "ICN",
+    # flake8-logging
+    "LOG",
+    # flake8-pie
+    "PIE",
+    # flake8-print
+    "T20",
+    # flake8-pytest-style
+    "PT",
+    # flake8-quotes
+    "Q",
+    # flake8-raise
+    "RSE",
+    # flake8-return
+    "RET",
+    # flake8-self
+    "SLF",
+    # flake8-simplify
+    "SIM",
+    # flake8-slots
+    "SLOT",
+    # flake8-tidy-imports
+    "TID",
+    # flake8-type-checking
+    "TC",
+    # flake8-unused-arguments
+    "ARG",
+    # flake8-use-pathlib
+    "PTH",
+    # eradicate
+    "ERA",
+    # Pylint
+    "PL",
+    # tryceratops
+    "TRY",
+    # flynt
+    "FLY",
+    # Perflint
+    "PERF",
+    # refurb
+    "FURB",
+    # Ruff-specific
+    "RUF",
+]
+
+ignore = [
+    # Line too long (handled by formatter)
+    "E501",
+    # Missing docstring in public module
+    "D100",
+    # Missing docstring in public class
+    "D101",
+    # Missing docstring in public method
+    "D102",
+    # Missing docstring in public function
+    "D103",
+    # Missing docstring in public package
+    "D104",
+    # Missing docstring in magic method
+    "D105",
+    # Missing docstring in __init__
+    "D107",
+    # One-line docstring should fit on one line
+    "D200",
+    # No blank lines allowed after function docstring
+    "D202",
+    # 1 blank line required before class docstring
+    "D203",
+    # Multi-line docstring summary should start at the second line
+    "D213",
+    # Section name should end with a colon
+    "D406",
+    # Missing dashed underline after section
+    "D407",
+    # Missing argument description
+    "D417",
+    # Avoid specifying long messages outside the exception class
+    "TRY003",
+    # Use logging.exception instead of logging.error
+    "TRY400",
+    # Abstract raise without from
+    "B904",
+    # Too many arguments to function call
+    "PLR0913",
+    # Too many return statements
+    "PLR0911",
+    # Too many branches
+    "PLR0912",
+    # Too many statements
+    "PLR0915",
+    # Magic value used in comparison
+    "PLR2004",
+    # Use ternary operator
+    "SIM108",
+    # Use contextlib.suppress
+    "SIM105",
+    # Combine if branches using logical or
+    "SIM102",
+    # Return condition directly
+    "SIM103",
+    # Use with statement
+    "SIM115",
+    # Move type checking imports into TYPE_CHECKING block
+    "TC001",
+    "TC002",
+    "TC003",
+    # Relative imports from parent modules (common in HA integrations)
+    "TID252",
+    # Exception messages (HA uses inline strings extensively)
+    "EM101",
+    "EM102",
+    # Formatter compatibility
+    "W191",
+    "E111",
+    "E114",
+    "E117",
+    "D206",
+    "D300",
+    "Q000",
+    "Q001",
+    "Q002",
+    "Q003",
+    "COM812",
+    "COM819",
+    "ISC001",
+    "ISC002",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = [
+    "S101",    # Use of assert
+    "PLR2004", # Magic value in comparison
+    "D",       # Docstrings not required in tests
+    "ARG001",  # Unused function argument (fixtures)
+    "ARG002",  # Unused method argument
+    "SLF001",  # Private member access
+    "PT004",   # Fixture does not return anything
+]
+"script/*" = [
+    "T20",     # print() allowed in scripts
+    "INP001",  # Implicit namespace package
+]
+"conftest.py" = [
+    "D",       # Docstrings
+]
+
+[tool.ruff.lint.flake8-import-conventions.extend-aliases]
+voluptuous = "vol"
+"homeassistant.helpers.config_validation" = "cv"
+"homeassistant.helpers.device_registry" = "dr"
+"homeassistant.helpers.entity_registry" = "er"
+"homeassistant.util.dt" = "dt_util"
+
+[tool.ruff.lint.flake8-pytest-style]
+fixture-parentheses = false
+mark-parentheses = false
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"async_timeout".msg = "Use asyncio.timeout instead (Python 3.11+)"
+"pytz".msg = "Use zoneinfo instead (Python 3.9+)"
+"typing.Optional".msg = "Use X | None instead"
+"typing.List".msg = "Use list[X] instead"
+"typing.Dict".msg = "Use dict[K, V] instead"
+"typing.Tuple".msg = "Use tuple[X, ...] instead"
+"typing.Set".msg = "Use set[X] instead"
+"typing.FrozenSet".msg = "Use frozenset[X] instead"
+"typing.Type".msg = "Use type[X] instead"
+"requests".msg = "Use aiohttp for async HTTP requests"
+
+[tool.ruff.lint.isort]
+force-sort-within-sections = true
+known-first-party = ["custom_components.wellborne"]
+combine-as-imports = true
+split-on-trailing-comma = false
+
+[tool.ruff.lint.mccabe]
+max-complexity = 15
+
+[tool.ruff.lint.pylint]
+max-args = 10
+max-branches = 15
+max-returns = 8
+max-statements = 50

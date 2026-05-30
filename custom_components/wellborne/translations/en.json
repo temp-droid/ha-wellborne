@@ -1,0 +1,286 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Wellborne",
+        "description": "Enter your Wellborne Plus app credentials to connect your EV charger.",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        },
+        "data_description": {
+          "email": "The email address used for your Wellborne Plus account",
+          "password": "Your Wellborne Plus account password"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate Wellborne",
+        "description": "Your session has expired. Please re-enter your password to continue.",
+        "data": {
+          "password": "Password"
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure Wellborne",
+        "description": "Update your Wellborne account credentials. Use a different email to avoid session conflicts with the mobile app.",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        },
+        "data_description": {
+          "email": "The email address for your Wellborne/EneRace account",
+          "password": "Your account password"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid email or password. Please check your credentials.",
+      "cannot_connect": "Cannot connect to Wellborne API. Please check your internet connection.",
+      "unknown": "An unexpected error occurred. Please try again."
+    },
+    "abort": {
+      "already_configured": "This account is already configured.",
+      "reauth_successful": "Re-authentication successful.",
+      "reconfigure_successful": "Credentials updated successfully."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Wellborne Options",
+        "data": {
+          "end_of_charge_entity": "End of Charge Sensor",
+          "vehicle_efficiency": "Vehicle Efficiency (km/kWh)",
+          "charging_poll_interval": "Polling Interval When Charging (seconds)",
+          "idle_poll_interval": "Polling Interval When Idle (seconds)"
+        },
+        "data_description": {
+          "end_of_charge_entity": "Select your car's 'End of charge' sensor to display time remaining",
+          "vehicle_efficiency": "Your vehicle's efficiency in km per kWh (typically 4-8 km/kWh). Used for 'Added Range' calculation.",
+          "charging_poll_interval": "How often to poll when charging (default: 30 seconds). More frequent polling during active charging.",
+          "idle_poll_interval": "How often to poll when idle (default: 120 seconds). Less frequent polling when not charging to reduce API calls."
+        }
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "charger_online": {
+        "name": "Charger Online"
+      },
+      "charging": {
+        "name": "Charging"
+      },
+      "vehicle_connected": {
+        "name": "Vehicle Connected"
+      },
+      "bluetooth_enabled": {
+        "name": "Bluetooth Enabled"
+      }
+    },
+    "button": {
+      "start_charging": {
+        "name": "Start Charging"
+      },
+      "stop_charging": {
+        "name": "Stop Charging"
+      },
+      "unlock_connector": {
+        "name": "Unlock Connector"
+      },
+      "prompt_charge": {
+        "name": "Charge Now"
+      }
+    },
+    "number": {
+      "max_current": {
+        "name": "Maximum Current"
+      },
+      "delay_time": {
+        "name": "Delay Time"
+      },
+      "max_power": {
+        "name": "Maximum Power"
+      },
+      "load_balancing_current": {
+        "name": "Load Balancing Power"
+      }
+    },
+    "select": {
+      "solar_mode": {
+        "name": "Solar Charging Mode",
+        "state": {
+          "off": "Off",
+          "eco": "Eco",
+          "pure_solar": "Pure Solar"
+        }
+      }
+    },
+    "sensor": {
+      "power": {
+        "name": "Charging Power"
+      },
+      "energy": {
+        "name": "Energy Delivered"
+      },
+      "voltage": {
+        "name": "Voltage L1"
+      },
+      "voltage_l2": {
+        "name": "Voltage L2"
+      },
+      "voltage_l3": {
+        "name": "Voltage L3"
+      },
+      "current": {
+        "name": "Current L1"
+      },
+      "current_l2": {
+        "name": "Current L2"
+      },
+      "current_l3": {
+        "name": "Current L3"
+      },
+      "max_current": {
+        "name": "Max Current"
+      },
+      "session_duration": {
+        "name": "Session Duration"
+      },
+      "status": {
+        "name": "Status",
+        "state": {
+          "idle": "Idle",
+          "charging": "Charging",
+          "pending": "Pending"
+        }
+      },
+      "added_range": {
+        "name": "Added Range"
+      },
+      "last_session_energy": {
+        "name": "Last Session Energy"
+      },
+      "last_session_duration": {
+        "name": "Last Session Duration"
+      },
+      "monthly_energy": {
+        "name": "Monthly Energy"
+      },
+      "yearly_energy": {
+        "name": "Yearly Energy"
+      },
+      "wifi_ssid": {
+        "name": "WiFi Network"
+      },
+      "household_power": {
+        "name": "Household Power"
+      },
+      "household_current_l1": {
+        "name": "Household Current L1"
+      },
+      "household_current_l2": {
+        "name": "Household Current L2"
+      },
+      "household_current_l3": {
+        "name": "Household Current L3"
+      },
+      "household_voltage_l1": {
+        "name": "Household Voltage L1"
+      },
+      "household_voltage_l2": {
+        "name": "Household Voltage L2"
+      },
+      "household_voltage_l3": {
+        "name": "Household Voltage L3"
+      }
+    },
+    "switch": {
+      "charging": {
+        "name": "Charging"
+      },
+      "connector_lock": {
+        "name": "Connector Lock"
+      },
+      "delayed_charging": {
+        "name": "Delayed Charging"
+      },
+      "scheduled_charging": {
+        "name": "Scheduled Charging"
+      },
+      "off_peak": {
+        "name": "Off-Peak Charging"
+      },
+      "lcd_enabled": {
+        "name": "LCD Display"
+      },
+      "low_power_reserve": {
+        "name": "Low Power Reserve"
+      },
+      "load_balancing": {
+        "name": "Load Balancing"
+      }
+    },
+    "time": {
+      "off_peak_weekday_start": {
+        "name": "Off-Peak Weekday Start"
+      },
+      "off_peak_weekday_end": {
+        "name": "Off-Peak Weekday End"
+      },
+      "scheduled_start_time": {
+        "name": "Scheduled Start Time"
+      }
+    }
+  },
+  "services": {
+    "start_charging": {
+      "name": "Start Charging",
+      "description": "Start a charging session on the specified charger.",
+      "fields": {
+        "charger_id": {
+          "name": "Charger ID",
+          "description": "The charger ID to start charging on"
+        }
+      }
+    },
+    "stop_charging": {
+      "name": "Stop Charging",
+      "description": "Stop the current charging session.",
+      "fields": {
+        "charger_id": {
+          "name": "Charger ID",
+          "description": "The charger ID to stop charging on"
+        }
+      }
+    },
+    "set_max_current": {
+      "name": "Set Maximum Current",
+      "description": "Set the maximum charging current in Amperes.",
+      "fields": {
+        "charger_id": {
+          "name": "Charger ID",
+          "description": "The charger ID to configure"
+        },
+        "current": {
+          "name": "Current",
+          "description": "Maximum charging current in Amperes (6-32A)"
+        }
+      }
+    },
+    "set_solar_mode": {
+      "name": "Set Solar Mode",
+      "description": "Set the solar charging mode.",
+      "fields": {
+        "charger_id": {
+          "name": "Charger ID",
+          "description": "The charger ID to configure"
+        },
+        "mode": {
+          "name": "Mode",
+          "description": "Solar charging mode: off, eco, or pure_solar"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,67 @@
+default_language_version:
+  python: python3.13
+
+repos:
+  # Ruff - Fast Python linter and formatter
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.4
+    hooks:
+      - id: ruff
+        name: ruff (lint)
+        args: [--fix, --exit-non-zero-on-fix]
+        types_or: [python, pyi]
+      - id: ruff-format
+        name: ruff (format)
+        types_or: [python, pyi]
+
+  # Standard pre-commit hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: ^(.*\.md|.*\.json)$
+      - id: end-of-file-fixer
+      - id: check-yaml
+        args: [--unsafe]
+      - id: check-json
+      - id: check-toml
+      - id: check-added-large-files
+        args: [--maxkb=1000]
+      - id: check-merge-conflict
+      - id: debug-statements
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: no-commit-to-branch
+        args: [--branch=main, --branch=master]
+
+  # Codespell - Spell checking
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.3.0
+    hooks:
+      - id: codespell
+        args:
+          - --ignore-words-list=hass,nd,iif
+          - --skip=*.csv,*.json,*.lock,*.min.js
+        types_or: [python, markdown, rst]
+        files: ^(custom_components|tests|docs)/
+
+  # Check manifest.json and hacs.json
+  - repo: local
+    hooks:
+      - id: check-manifest
+        name: Check manifest.json
+        entry: python -c "import json; json.load(open('custom_components/wellborne/manifest.json'))"
+        language: python
+        files: ^custom_components/wellborne/manifest\.json$
+        pass_filenames: false
+
+      - id: check-hacs
+        name: Check hacs.json
+        entry: python -c "import json; json.load(open('hacs.json'))"
+        language: python
+        files: ^hacs\.json$
+        pass_filenames: false
+
+# Pyright is intentionally not included in pre-commit as it can be slow.
+# Run it manually with: pyright custom_components/wellborne
+# Or use: ./script/type-check

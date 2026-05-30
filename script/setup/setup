@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Full setup script
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+cd "$PROJECT_DIR"
+
+# Run bootstrap first
+./script/setup/bootstrap
+
+# Activate virtual environment
+source .venv/bin/activate
+
+# Verify installation
+echo "==> Verifying installation..."
+python -c "import custom_components.wellborne" && echo "  - Integration package: OK"
+python -c "import pytest" && echo "  - pytest: OK"
+python -c "import ruff" 2>/dev/null || ruff --version > /dev/null && echo "  - ruff: OK"
+
+echo ""
+echo "==> Setup complete! Ready for development."

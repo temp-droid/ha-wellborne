@@ -1,0 +1,8 @@
+{
+  "result": 0,
+  "msg": "operate successfully",
+  "obj": {
+    "wifiSsid": "TestSSID",
+    "wifiPassword": "test_wifi_password"
+  }
+}

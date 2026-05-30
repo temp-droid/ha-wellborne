@@ -1,0 +1,19 @@
+{
+  "result": 0,
+  "msg": "operate successfully",
+  "obj": [
+    {
+      "owner": 1,
+      "isVa1NovoNano": false,
+      "createTime": "2024-10-18 16:47:07",
+      "bluetoothEnable": 0,
+      "chargerId": "TEST0000001",
+      "connectorStandard": {"country": "", "connector": ""},
+      "connectorModel": ["AC"],
+      "alias": "Demo Charger",
+      "model": "AC",
+      "connectorNum": 1,
+      "chargePointModelPower": 22
+    }
+  ]
+}

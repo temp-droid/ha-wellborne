@@ -1,0 +1,10 @@
+{
+  "result": 0,
+  "msg": "operate successfully",
+  "obj": {
+    "delayTime": 0,
+    "status": 2,
+    "chargerId": "TEST0000001",
+    "selectStatus": 0
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "result": 0,
+  "msg": "operate successfully",
+  "obj": {
+    "solarChargingMode": "0",
+    "solarLimitChargingPower": "3.96",
+    "connectorLock": "true",
+    "lcd": "Disable",
+    "chargingMode": "1",
+    "allowChargingTime": "00:00-00:00",
+    "maximumOutputCurrent": "16.00",
+    "maxPower": null,
+    "lowPowerReserve": "Disable",
+    "fullContinueCharge": "Disable",
+    "phaseWringMethord": null,
+    "forceL2RelayEnable": null,
+    "language": {
+      "describe": "French",
+      "value": "French"
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "result": 0,
+  "msg": "operate successfully",
+  "obj": {
+    "totalDomesticPower": "20",
+    "enablePowerAllocationCharge": "1",
+    "samplingWiring": "0",
+    "typeOfMeter": "Eastron SDM630",
+    "meterAddress": "2",
+    "solarChargingMode": "0",
+    "solarLimitChargingPower": "3.96",
+    "linkyLimitCur": null,
+    "linkyIsousc": null,
+    "externalCurrent": {
+      "ucurrent": "1A",
+      "vcurrent": "3A",
+      "wcurrent": "0A",
+      "uvoltage": "215V",
+      "vvoltage": "214V",
+      "wvoltage": "231V",
+      "power": "783W"
+    }
+  }
+}

@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Run all quality checks
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+cd "$PROJECT_DIR"
+
+# Activate virtual environment if available
+if [[ -f ".venv/bin/activate" ]]; then
+    source .venv/bin/activate
+fi
+
+FAILED=0
+
+echo "========================================"
+echo "Running all quality checks"
+echo "========================================"
+echo ""
+
+# Ruff format check
+echo "==> [1/4] Checking formatting..."
+if ruff format --check custom_components/wellborne tests; then
+    echo "  - Format: PASS"
+else
+    echo "  - Format: FAIL"
+    FAILED=1
+fi
+echo ""
+
+# Ruff lint
+echo "==> [2/4] Checking lint..."
+if ruff check custom_components/wellborne tests; then
+    echo "  - Lint: PASS"
+else
+    echo "  - Lint: FAIL"
+    FAILED=1
+fi
+echo ""
+
+# Pyright type check
+echo "==> [3/4] Checking types..."
+if pyright custom_components/wellborne; then
+    echo "  - Types: PASS"
+else
+    echo "  - Types: FAIL"
+    FAILED=1
+fi
+echo ""
+
+# Tests
+echo "==> [4/4] Running tests..."
+if pytest tests/ -v --tb=short; then
+    echo "  - Tests: PASS"
+else
+    echo "  - Tests: FAIL"
+    FAILED=1
+fi
+echo ""
+
+echo "========================================"
+if [[ $FAILED -eq 0 ]]; then
+    echo "All checks PASSED!"
+    exit 0
+else
+    echo "Some checks FAILED!"
+    exit 1
+fi
