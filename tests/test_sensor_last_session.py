@@ -116,7 +116,8 @@ async def test_last_session_energy_attributes(
     last_session_energy = next(e for e in entities_added if e.entity_description.key == "last_session_energy")
     assert last_session_energy.device_class == SensorDeviceClass.ENERGY
     assert last_session_energy.native_unit_of_measurement == UnitOfEnergy.KILO_WATT_HOUR
-    assert last_session_energy.state_class == SensorStateClass.MEASUREMENT
+    # device_class=energy forbids measurement; a per-session snapshot has no state_class
+    assert last_session_energy.state_class is None
 
 
 async def test_last_session_energy_none_when_no_session(

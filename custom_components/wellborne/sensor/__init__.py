@@ -322,7 +322,8 @@ SENSOR_DESCRIPTIONS: tuple[WellborneSensorEntityDescription, ...] = (
         translation_key="last_session_energy",
         device_class=SensorDeviceClass.ENERGY,
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        state_class=SensorStateClass.MEASUREMENT,
+        # No state_class: a per-session snapshot is not an accumulating total, and HA
+        # rejects measurement+energy. Omitting it keeps the value out of long-term sums.
         value_fn=_get_last_session_energy,
     ),
     WellborneSensorEntityDescription(

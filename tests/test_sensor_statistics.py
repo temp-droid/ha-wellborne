@@ -32,8 +32,10 @@ def _desc(key: str):
     return next(d for d in SENSOR_DESCRIPTIONS if d.key == key)
 
 
-def test_last_session_energy_is_measurement_not_total():
-    assert _desc("last_session_energy").state_class == SensorStateClass.MEASUREMENT
+def test_last_session_energy_has_no_state_class():
+    # device_class=energy forbids state_class=measurement; a per-session snapshot
+    # is not a total either, so it must have no state_class.
+    assert _desc("last_session_energy").state_class is None
 
 
 def test_last_session_duration_is_measurement_not_total():
