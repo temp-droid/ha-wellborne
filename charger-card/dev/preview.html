@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Wellborne Charger Card — preview</title>
+    <!--
+      HOW TO USE
+      ----------
+      1. From charger-card/:   npm install && npm run build
+      2. Open this file in a browser. Because dist/wellborne-charger-card.js is a
+         fully self-contained bundle (Lit included), opening via file:// works in
+         most browsers.
+      3. If your browser blocks ES-module loading over file:// (some do), serve
+         the directory instead:
+             npx serve .
+         then visit  http://localhost:3000/dev/preview.html
+
+      This harness builds a MOCK `hass` object (states + callApi/callWS) so the
+      power-curve history fetch and energy/get_prefs resolve to fake data — no
+      Home Assistant required. Three instances render the charging / idle /
+      offline states, each shown against a dark and a light themed wrapper.
+    -->
+    <style>
+      body {
+        margin: 0;
+        font-family:
+          -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      }
+      h1 {
+        font-size: 1rem;
+        margin: 16px 16px 4px;
+        font-weight: 600;
+      }
+      .theme-label {
+        margin: 8px 16px;
+        font-size: 0.8rem;
+        opacity: 0.7;
+      }
+      .grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+        padding: 16px;
+        align-items: flex-start;
+      }
+      .grid > * {
+        width: 340px;
+        max-width: 100%;
+      }
+      /* Dark theme wrapper: set the HA CSS variables the card reads. */
+      .theme-dark {
+        background: #0c0c0e;
+        color: #e1e1e1;
+        --ha-card-background: #1c1c1e;
+        --card-background-color: #1c1c1e;
+        --primary-text-color: #e1e1e1;
+        --secondary-text-color: #9b9b9b;
+        --divider-color: rgba(255, 255, 255, 0.12);
+        --energy-solar-color: #0f9d58;
+        --error-color: #ff5252;
+      }
+      /* Light theme wrapper. */
+      .theme-light {
+        background: #f4f5f7;
+        color: #212121;
+        --ha-card-background: #ffffff;
+        --card-background-color: #ffffff;
+        --primary-text-color: #212121;
+        --secondary-text-color: #717171;
+        --divider-color: rgba(0, 0, 0, 0.12);
+        --energy-solar-color: #0a7d44;
+        --error-color: #db4437;
+      }
+      ha-card {
+        border-radius: 12px;
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Stub <ha-card> and <ha-icon> so the card renders standalone (HA provides
+         these at runtime; here we approximate them). -->
+    <script>
+      if (!customElements.get('ha-card')) {
+        customElements.define(
+          'ha-card',
+          class extends HTMLElement {
+            connectedCallback() {
+              this.style.display = 'block';
+            }
+          },
+        );
+      }
+      if (!customElements.get('ha-icon')) {
+        customElements.define(
+          'ha-icon',
+          class extends HTMLElement {
+            static get observedAttributes() {
+              return ['icon'];
+            }
+            connectedCallback() {
+              this._render();
+            }
+            attributeChangedCallback() {
+              this._render();
+            }
+            constructor() {
+              super();
+              // Render into a shadow root so we never mutate the light DOM that
+              // Lit is walking to bind markers (a real ha-icon does the same).
+              this._root = this.attachShadow({ mode: 'open' });
+            }
+            _render() {
+              const size = getComputedStyle(this).getPropertyValue('--mdc-icon-size') || '18px';
+              this.style.display = 'inline-block';
+              this.style.width = size;
+              this.style.height = size;
+              this.style.verticalAlign = 'middle';
+              // Real mdi path data so preview matches what HA renders (preview only).
+              const MDI = {
+                'mdi:lightning-bolt': 'M11,15H6L13,1V9H18L11,23V15Z',
+                'mdi:sleep': 'M23,12H17V10L20.39,6H17V4H23V6L19.62,10H23V12M15,16H9V14L12.39,10H9V8H15V10L11.62,14H15V16M7,20H1V18L4.39,14H1V12H7V14L3.62,18H7V20Z',
+                'mdi:cloud-off-outline': 'M2.39,1.73L1.11,3L4.85,6.74C2.7,7.36 1,9.18 1,11.5A4.5,4.5 0 0,0 5.5,16H17.11L19.5,18.39L20.84,17.11L2.39,1.73M5.5,14A2.5,2.5 0 0,1 3,11.5A2.5,2.5 0 0,1 5.5,9H6.11L11,13.89V14H5.5M9.04,4.96C9.91,4.36 10.92,4 12,4A6,6 0 0,1 18,10C19.71,10 21.16,11.21 21.5,12.83L19.84,11.17C19.4,10.5 18.74,10 18,10H17.65L17.4,9.11C16.74,6.74 14.57,5 12,5C11.21,5 10.46,5.18 9.79,5.5L9.04,4.96Z',
+                'mdi:power-plug': 'M16,7V3H14V7H10V3H8V7H8C7,7 6,8 6,9V14.5L9.5,18V21H14.5V18L18,14.5V9C18,8 17,7 16,7Z',
+                'mdi:power-plug-outline': 'M14,2V8H15.5L17,8C18,8 19,9 19,10V15.5L15.5,19V22H8.5V19L5,15.5V10C5,9 6,8 7,8L8.5,8V2H10.5V8H12V2H14M7,10V14.67L10.5,18.17V20H13.5V18.17L17,14.67V10H7Z',
+                'mdi:wifi': 'M12,21L15.6,16.5C14.6,15.75 13.35,15.3 12,15.3C10.65,15.3 9.4,15.75 8.4,16.5L12,21M12,3C7.95,3 4.21,4.34 1.2,6.6L3,9C5.5,7.12 8.62,6 12,6C15.38,6 18.5,7.12 21,9L22.8,6.6C19.79,4.34 16.05,3 12,3M12,9C9.3,9 6.81,9.89 4.8,11.4L6.6,13.8C8.1,12.67 9.97,12 12,12C14.03,12 15.9,12.67 17.4,13.8L19.2,11.4C17.19,9.89 14.7,9 12,9Z',
+                'mdi:wifi-off': 'M22.99,9C19.79,6.34 15.93,5 12,5C10.5,5 9,5.19 7.55,5.57L9.31,7.33C10.18,7.13 11.08,7 12,7C15.34,7 18.5,8.12 21,10L22.99,9M2.39,1.73L1.11,3L4.27,6.16C2.96,6.86 1.81,7.81 0.84,9L2.84,10.5C3.84,9.5 5.04,8.7 6.36,8.2L8.39,10.23C7.05,10.78 5.81,11.59 4.81,12.62L6.81,14.62C8.16,13.27 10,12.5 12,12.5C12.16,12.5 12.31,12.5 12.46,12.5L16.39,16.43L13.5,19.5L17.5,23.5L18.78,22.23L2.39,1.73Z',
+                'mdi:current-ac': 'M11.5,7.5L9,15L8,11.5L5,16H3L7,9.5L8,13L11,7.5H11.5M13.93,7.07C16.27,9.42 16.27,13.19 13.93,15.54L13.22,14.83C15.05,12.95 15.05,9.65 13.22,7.78L13.93,7.07M15.34,5.66C18.46,8.78 18.46,13.84 15.34,16.95L14.63,16.24C17.27,13.5 17.27,9.12 14.63,6.37L15.34,5.66M12.5,9.07L11.79,9.78C12.71,10.74 12.71,12.26 11.79,13.22L12.5,13.93C13.83,12.5 13.83,10.5 12.5,9.07Z',
+                'mdi:map-marker-distance': 'M14.5,9.31C13.65,9.31 12.96,8.62 12.96,7.77C12.96,6.92 13.65,6.23 14.5,6.23C15.35,6.23 16.04,6.92 16.04,7.77C16.04,8.62 15.35,9.31 14.5,9.31M14.5,3.5C12.14,3.5 10.23,5.41 10.23,7.77C10.23,10.96 14.5,15.69 14.5,15.69C14.5,15.69 18.77,10.96 18.77,7.77C18.77,5.41 16.86,3.5 14.5,3.5M6,13L1,22H11L6,13M6,17.14L7.45,20H4.55L6,17.14Z',
+                'mdi:history': 'M13.5,8H12V13L16.28,15.54L17,14.33L13.5,12.25V8M13,3A9,9 0 0,0 4,12H1L4.96,16.03L9,12H6A7,7 0 0,1 13,5A7,7 0 0,1 20,12A7,7 0 0,1 13,19C11.07,19 9.32,18.21 8.06,16.94L6.64,18.36C8.27,20 10.5,21 13,21A9,9 0 0,0 22,12A9,9 0 0,0 13,3',
+              };
+              const d = MDI[this.getAttribute('icon')];
+              this._root.innerHTML =
+                '<svg viewBox="0 0 24 24" width="100%" height="100%" style="display:block">' +
+                (d ? '<path d="' + d + '" fill="currentColor"/>' : '<circle cx="12" cy="12" r="6" fill="currentColor"/>') +
+                '</svg>';
+            }
+          },
+        );
+      }
+    </script>
+
+    <h1>Wellborne Charger Card — three states, two themes</h1>
+
+    <div class="theme-dark">
+      <div class="theme-label">Dark theme</div>
+      <div class="grid" id="grid-dark"></div>
+    </div>
+    <div class="theme-light">
+      <div class="theme-label">Light theme</div>
+      <div class="grid" id="grid-light"></div>
+    </div>
+
+    <script type="module">
+      import '../dist/wellborne-charger-card.js';
+
+      const HOURS = 4;
+      const NOW = Date.now();
+
+      // Believable rising/plateauing ~7.4 kW curve over the last 4h.
+      function fakePowerHistory() {
+        const pts = [];
+        const n = 48;
+        for (let i = 0; i < n; i++) {
+          const frac = i / (n - 1);
+          const t = new Date(NOW - (HOURS * 3600_000) * (1 - frac)).toISOString();
+          // ramp up to plateau, slight noise.
+          const ramp = Math.min(1, frac * 3);
+          const plateau = 7400 * ramp;
+          const noise = Math.sin(i * 0.7) * 120;
+          pts.push({
+            entity_id: 'sensor.wellborne_garage_charging_power',
+            state: Math.max(0, Math.round(plateau + noise)).toString(),
+            last_changed: t,
+            last_updated: t,
+          });
+        }
+        return pts;
+      }
+
+      function st(entity_id, state, unit) {
+        return {
+          entity_id,
+          state: String(state),
+          attributes: unit ? { unit_of_measurement: unit } : {},
+          last_changed: new Date(NOW).toISOString(),
+          last_updated: new Date(NOW).toISOString(),
+        };
+      }
+
+      // ---- per-state mock entity sets (distinct entity_ids so resolver picks them) ----
+      function chargingStates(prefix) {
+        return {
+          [`sensor.${prefix}_charging_power`]: st(`sensor.${prefix}_charging_power`, 7380, 'W'),
+          [`sensor.${prefix}_energy_delivered`]: st(`sensor.${prefix}_energy_delivered`, 9.2, 'kWh'),
+          [`sensor.${prefix}_current_l1`]: st(`sensor.${prefix}_current_l1`, 16, 'A'),
+          [`sensor.${prefix}_session_duration`]: st(`sensor.${prefix}_session_duration`, 84, 'min'),
+          [`sensor.${prefix}_status`]: st(`sensor.${prefix}_status`, 'charging'),
+          [`sensor.${prefix}_added_range`]: st(`sensor.${prefix}_added_range`, 142, 'km'),
+          [`sensor.${prefix}_monthly_energy`]: st(`sensor.${prefix}_monthly_energy`, 142, 'kWh'),
+          [`sensor.${prefix}_yearly_energy`]: st(`sensor.${prefix}_yearly_energy`, 1840, 'kWh'),
+          [`sensor.${prefix}_last_session_energy`]: st(`sensor.${prefix}_last_session_energy`, 22.4, 'kWh'),
+          [`sensor.${prefix}_last_session_duration`]: st(`sensor.${prefix}_last_session_duration`, 192, 'min'),
+          [`sensor.${prefix}_wifi_network`]: st(`sensor.${prefix}_wifi_network`, 'Garage-WiFi'),
+          [`binary_sensor.${prefix}_charging`]: st(`binary_sensor.${prefix}_charging`, 'on'),
+          [`binary_sensor.${prefix}_charger_online`]: st(`binary_sensor.${prefix}_charger_online`, 'on'),
+          [`binary_sensor.${prefix}_vehicle_connected`]: st(`binary_sensor.${prefix}_vehicle_connected`, 'on'),
+          'sensor.ioniq5_battery_level': st('sensor.ioniq5_battery_level', 68, '%'),
+        };
+      }
+
+      function idleStates(prefix) {
+        return {
+          [`sensor.${prefix}_charging_power`]: st(`sensor.${prefix}_charging_power`, 0, 'W'),
+          [`sensor.${prefix}_energy_delivered`]: st(`sensor.${prefix}_energy_delivered`, 0, 'kWh'),
+          [`sensor.${prefix}_current_l1`]: st(`sensor.${prefix}_current_l1`, 0, 'A'),
+          [`sensor.${prefix}_session_duration`]: st(`sensor.${prefix}_session_duration`, 'unknown'),
+          [`sensor.${prefix}_status`]: st(`sensor.${prefix}_status`, 'idle'),
+          [`sensor.${prefix}_added_range`]: st(`sensor.${prefix}_added_range`, 0, 'km'),
+          [`sensor.${prefix}_monthly_energy`]: st(`sensor.${prefix}_monthly_energy`, 142, 'kWh'),
+          [`sensor.${prefix}_yearly_energy`]: st(`sensor.${prefix}_yearly_energy`, 1840, 'kWh'),
+          [`sensor.${prefix}_last_session_energy`]: st(`sensor.${prefix}_last_session_energy`, 22.4, 'kWh'),
+          [`sensor.${prefix}_last_session_duration`]: st(`sensor.${prefix}_last_session_duration`, 192, 'min'),
+          [`sensor.${prefix}_wifi_network`]: st(`sensor.${prefix}_wifi_network`, 'Garage-WiFi'),
+          [`binary_sensor.${prefix}_charging`]: st(`binary_sensor.${prefix}_charging`, 'off'),
+          [`binary_sensor.${prefix}_charger_online`]: st(`binary_sensor.${prefix}_charger_online`, 'on'),
+          [`binary_sensor.${prefix}_vehicle_connected`]: st(`binary_sensor.${prefix}_vehicle_connected`, 'unknown'),
+        };
+      }
+
+      function offlineStates(prefix) {
+        return {
+          [`sensor.${prefix}_charging_power`]: st(`sensor.${prefix}_charging_power`, 'unavailable'),
+          [`sensor.${prefix}_energy_delivered`]: st(`sensor.${prefix}_energy_delivered`, 'unavailable'),
+          [`sensor.${prefix}_current_l1`]: st(`sensor.${prefix}_current_l1`, 'unavailable'),
+          [`sensor.${prefix}_session_duration`]: st(`sensor.${prefix}_session_duration`, 'unavailable'),
+          [`sensor.${prefix}_status`]: st(`sensor.${prefix}_status`, 'idle'),
+          [`sensor.${prefix}_added_range`]: st(`sensor.${prefix}_added_range`, 'unavailable'),
+          [`sensor.${prefix}_monthly_energy`]: st(`sensor.${prefix}_monthly_energy`, 142, 'kWh'),
+          [`sensor.${prefix}_yearly_energy`]: st(`sensor.${prefix}_yearly_energy`, 1840, 'kWh'),
+          [`sensor.${prefix}_last_session_energy`]: st(`sensor.${prefix}_last_session_energy`, 22.4, 'kWh'),
+          [`sensor.${prefix}_last_session_duration`]: st(`sensor.${prefix}_last_session_duration`, 192, 'min'),
+          [`sensor.${prefix}_wifi_network`]: st(`sensor.${prefix}_wifi_network`, ''),
+          [`binary_sensor.${prefix}_charging`]: st(`binary_sensor.${prefix}_charging`, 'off'),
+          [`binary_sensor.${prefix}_charger_online`]: st(`binary_sensor.${prefix}_charger_online`, 'off'),
+          [`binary_sensor.${prefix}_vehicle_connected`]: st(`binary_sensor.${prefix}_vehicle_connected`, 'unknown'),
+        };
+      }
+
+      // Build an entity registry + device registry so the preview exercises the
+      // REAL (correct) resolver path: device -> charger_id -> unique_id match.
+      // entity_ids use the translated-name slug exactly like real HA.
+      const KEY_TO_UID = {
+        charging_power: 'power',
+        energy_delivered: 'energy',
+        current_l1: 'current',
+        session_duration: 'session_duration',
+        status: 'status',
+        added_range: 'added_range',
+        monthly_energy: 'monthly_energy',
+        yearly_energy: 'yearly_energy',
+        last_session_energy: 'last_session_energy',
+        last_session_duration: 'last_session_duration',
+        wifi_network: 'wifi_ssid',
+        charging: 'charging',
+        charger_online: 'charger_online',
+        vehicle_connected: 'vehicle_connected',
+      };
+
+      function makeRegistry(states, prefix, deviceId, chargerId) {
+        const entities = {};
+        for (const entityId of Object.keys(states)) {
+          if (entityId === 'sensor.ioniq5_battery_level') {
+            continue; // belongs to the car integration, not the charger device
+          }
+          const dot = entityId.indexOf('.');
+          let objectId = entityId.slice(dot + 1);
+          // strip the device-name prefix to get the name-slug suffix
+          const slug = objectId.startsWith(prefix + '_')
+            ? objectId.slice(prefix.length + 1)
+            : objectId;
+          const key = KEY_TO_UID[slug];
+          if (!key) continue;
+          entities[entityId] = {
+            entity_id: entityId,
+            device_id: deviceId,
+            platform: 'wellborne',
+            unique_id: `${chargerId}_${key}`,
+          };
+        }
+        return entities;
+      }
+
+      function makeHass(states, prefix) {
+        const deviceId = `dev_${prefix}`;
+        const chargerId = `CHG${prefix}`;
+        return {
+          states,
+          entities: makeRegistry(states, prefix, deviceId, chargerId),
+          devices: {
+            [deviceId]: {
+              id: deviceId,
+              name: 'Wellborne Garage',
+              identifiers: [['wellborne', chargerId]],
+            },
+          },
+          config: { currency: 'EUR' },
+          locale: { language: 'en' },
+          callApi(method, path) {
+            if (path.startsWith('history/period')) {
+              return Promise.resolve([fakePowerHistory()]);
+            }
+            return Promise.resolve([]);
+          },
+          // Empty energy prefs -> exercises the static price path.
+          callWS(msg) {
+            if (msg && msg.type === 'energy/get_prefs') {
+              return Promise.resolve({ energy_sources: [] });
+            }
+            return Promise.resolve({});
+          },
+        };
+      }
+
+      const VARIANTS = [
+        {
+          title: 'Charging',
+          states: chargingStates,
+          config: (prefix) => ({
+            type: 'custom:wellborne-charger-card',
+            device: `dev_${prefix}`,
+            name: 'Wellborne Garage',
+            battery_entity: 'sensor.ioniq5_battery_level',
+            price: 0.3783,
+            currency: 'EUR',
+          }),
+        },
+        {
+          title: 'Idle',
+          states: idleStates,
+          config: (prefix) => ({
+            type: 'custom:wellborne-charger-card',
+            device: `dev_${prefix}`,
+            name: 'Wellborne Garage',
+            price: 0.3783,
+            currency: 'EUR',
+          }),
+        },
+        {
+          title: 'Offline',
+          states: offlineStates,
+          config: (prefix) => ({
+            type: 'custom:wellborne-charger-card',
+            device: `dev_${prefix}`,
+            name: 'Wellborne Garage',
+            price: 0.3783,
+            currency: 'EUR',
+          }),
+        },
+      ];
+
+      function mountInto(gridId, themeTag) {
+        const grid = document.getElementById(gridId);
+        for (const v of VARIANTS) {
+          const prefix = `wb_${v.title.toLowerCase()}_${themeTag}`;
+          const card = document.createElement('wellborne-charger-card');
+          const cfg = v.config(prefix);
+          card.setConfig(cfg);
+          card.hass = makeHass(v.states(prefix), prefix);
+          grid.appendChild(card);
+        }
+      }
+
+      mountInto('grid-dark', 'dark');
+      mountInto('grid-light', 'light');
+    </script>
+
+    <!-- Live-reload (preview only): poll the built bundle's Last-Modified and
+         reload the tab when esbuild --watch rebuilds it. -->
+    <script>
+      (async () => {
+        const url = '../dist/wellborne-charger-card.js';
+        let last = null;
+        const stamp = async () => {
+          try {
+            const r = await fetch(url + '?t=' + Date.now(), { method: 'HEAD', cache: 'no-store' });
+            return r.headers.get('last-modified') || r.headers.get('content-length');
+          } catch {
+            return null;
+          }
+        };
+        last = await stamp();
+        setInterval(async () => {
+          const now = await stamp();
+          if (now && last && now !== last) location.reload();
+          if (now) last = now;
+        }, 1000);
+      })();
+    </script>
+  </body>
+</html>

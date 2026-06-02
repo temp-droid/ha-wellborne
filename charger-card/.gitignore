@@ -1,0 +1,8 @@
+node_modules/
+dev/card1.png
+*.log
+dist/*.map
+# HACS must ship the built bundle, but the repo root ignores dist/ (Python).
+# Re-include the directory and the bundle so HACS can fetch it.
+!dist/
+!dist/wellborne-charger-card.js
