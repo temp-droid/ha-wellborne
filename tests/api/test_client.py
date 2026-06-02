@@ -13,6 +13,7 @@ from custom_components.wellborne.api import (
     ApiConnectionError,
     ApiResponseError,
     AuthenticationError,
+    ChargerOfflineError,
     SessionExpiredError,
     WellborneApiClient,
 )
@@ -1286,6 +1287,191 @@ class TestWellborneApiClient:
 
             with pytest.raises(ApiResponseError, match="not found"):
                 await client.async_get_charger_data("NONEXISTENT")
+
+        await client.close()
+
+    @pytest.mark.unit
+    async def test_async_get_charger_data_probe_offline_raises_charger_offline(
+        self,
+        client: WellborneApiClient,
+        api_login_response: dict[str, Any],
+        api_charger_list_response: dict[str, Any],
+    ) -> None:
+        """Test the explicit config probe raising ChargerOfflineError aborts the whole fetch."""
+        offline_config_response = {
+            "result": 500,
+            "msg": "Charger communication error. Please try again later",
+            "obj": None,
+        }
+
+        with aioresponses() as mocked:
+            mocked.post(f"{API_BASE_URL}{Endpoints.LOGIN}", payload=api_login_response)
+            mocked.post(f"{API_BASE_URL}{Endpoints.CHARGER_LIST}", payload=api_charger_list_response)
+            mocked.post(f"{API_BASE_URL}{Endpoints.GET_CHARGER_CONFIG}", payload=offline_config_response)
+
+            await client.async_login(TEST_PASSWORD)
+
+            with pytest.raises(ChargerOfflineError):
+                await client.async_get_charger_data(TEST_CHARGER_ID)
+
+            # The probe aborts before any config-tier endpoint is hit (no hammering while offline).
+            home_key = ("POST", URL(f"{API_BASE_URL}{Endpoints.GET_HOME_CONFIG}"))
+            assert home_key not in mocked.requests, "Config tier must not be fetched once the probe is offline"
+
+        await client.close()
+
+    @staticmethod
+    def _register_charger_data_endpoints(mocked: aioresponses, *, repeat_config: bool = False) -> None:
+        """Register all live + config-tier endpoints for a happy-path charger-data fetch.
+
+        Live endpoints (called every cycle) always repeat. Config-tier endpoints repeat only
+        when ``repeat_config`` is set; otherwise they are registered once so a second cycle that
+        re-requests them would fail — proving the cache served the second call.
+        """
+        live = {
+            "result": 0,
+            "msg": "success",
+        }
+        charger_list = {
+            "result": 0,
+            "msg": "operate successfully",
+            "obj": [
+                {
+                    "chargerId": TEST_CHARGER_ID,
+                    "alias": "Test Charger",
+                    "model": "AC",
+                    "owner": 1,
+                    "connectorNum": 1,
+                    "chargePointModelPower": 22,
+                    "bluetoothEnable": 0,
+                    "createTime": "2024-01-01 00:00:00",
+                }
+            ],
+        }
+        config = {
+            "result": 0,
+            "msg": "success",
+            "obj": {
+                "maximumOutputCurrent": "16.00",
+                "connectorLock": "true",
+                "lcd": "Enable",
+                "lowPowerReserve": "Disable",
+            },
+        }
+        is_charging = {**live, "obj": False}
+        transactions = {**live, "obj": []}
+        home_config = {**live, "obj": {"solarChargingMode": "0"}}
+        delayed = {**live, "obj": {"delayTime": 0, "status": 2, "selectStatus": 0}}
+        scheduled = {**live, "obj": {"enabled": False, "cycle": "", "cycleTime": ""}}
+        off_peak = {**live, "obj": {"status": 0}}
+        monthly = {**live, "obj": {"energyTotal": 50.5, "sessionCount": 5}}
+        yearly = {**live, "obj": {"energyTotal": 500.0, "sessionCount": 50}}
+        firmware = {**live, "obj": {"updateAvailable": False, "currentVersion": "1.2.3"}}
+        wifi = {**live, "obj": {"ssid": "HomeWifi", "signal": -50}}
+        load_balancing = {**live, "obj": {"enabled": False, "maxCurrent": 32}}
+
+        # Live tier — called on every cycle, so allow repeats.
+        mocked.post(f"{API_BASE_URL}{Endpoints.CHARGER_LIST}", payload=charger_list, repeat=True)
+        mocked.post(f"{API_BASE_URL}{Endpoints.GET_CHARGER_CONFIG}", payload=config, repeat=True)
+        mocked.post(f"{API_BASE_URL}{Endpoints.IS_CHARGING}", payload=is_charging, repeat=True)
+        mocked.post(f"{API_BASE_URL}{Endpoints.TRANSACTION_LIST}", payload=transactions, repeat=True)
+
+        # Config/stats tier — registered once (or repeated) so cache behaviour is observable.
+        mocked.post(f"{API_BASE_URL}{Endpoints.GET_HOME_CONFIG}", payload=home_config, repeat=repeat_config)
+        mocked.post(f"{API_BASE_URL}{Endpoints.GET_DELAYED_CHARGING}", payload=delayed, repeat=repeat_config)
+        mocked.post(f"{API_BASE_URL}{Endpoints.GET_SCHEDULED_TASK}", payload=scheduled, repeat=repeat_config)
+        mocked.post(f"{API_BASE_URL}{Endpoints.GET_OFF_PEAK_TIME}", payload=off_peak, repeat=repeat_config)
+        mocked.post(f"{API_BASE_URL}{Endpoints.TRANSACTION_MONTH}", payload=monthly, repeat=repeat_config)
+        mocked.post(f"{API_BASE_URL}{Endpoints.TRANSACTION_YEAR}", payload=yearly, repeat=repeat_config)
+        mocked.post(f"{API_BASE_URL}{Endpoints.GET_FIRMWARE_STATUS}", payload=firmware, repeat=repeat_config)
+        mocked.post(f"{API_BASE_URL}{Endpoints.GET_WIFI_INFO}", payload=wifi, repeat=repeat_config)
+        mocked.post(f"{API_BASE_URL}{Endpoints.GET_LOAD_BALANCING}", payload=load_balancing, repeat=repeat_config)
+
+    @pytest.mark.unit
+    async def test_async_get_charger_data_caches_config_tier(
+        self,
+        client: WellborneApiClient,
+        api_login_response: dict[str, Any],
+    ) -> None:
+        """Test the config tier is fetched once then served from cache on the next cycle.
+
+        A fresh cache means the second call re-requests only the live endpoints; invalidating
+        the cache forces the config tier to be fetched again.
+        """
+        home_key = ("POST", URL(f"{API_BASE_URL}{Endpoints.GET_HOME_CONFIG}"))
+        config_key = ("POST", URL(f"{API_BASE_URL}{Endpoints.GET_CHARGER_CONFIG}"))
+
+        with aioresponses() as mocked:
+            mocked.post(f"{API_BASE_URL}{Endpoints.LOGIN}", payload=api_login_response)
+            self._register_charger_data_endpoints(mocked)
+
+            await client.async_login(TEST_PASSWORD)
+
+            # First cycle: populates the cache (config tier hit once).
+            data1 = await client.async_get_charger_data(TEST_CHARGER_ID)
+            assert data1.charger.charger_id == TEST_CHARGER_ID
+            assert data1.wifi_info is not None
+            assert data1.wifi_info.ssid == "HomeWifi"
+            assert len(mocked.requests[home_key]) == 1
+
+            # Second cycle (cache fresh): live endpoints called again, config tier NOT re-requested.
+            data2 = await client.async_get_charger_data(TEST_CHARGER_ID)
+            assert data2.wifi_info is not None
+            assert data2.wifi_info.ssid == "HomeWifi"  # served from cache
+            assert len(mocked.requests[home_key]) == 1, "Config tier must not be re-requested while cache is fresh"
+            assert len(mocked.requests[config_key]) == 2, "Probe/live config is fetched every cycle"
+
+        await client.close()
+
+    @pytest.mark.unit
+    async def test_invalidate_config_cache_forces_refetch(
+        self,
+        client: WellborneApiClient,
+        api_login_response: dict[str, Any],
+    ) -> None:
+        """Test invalidate_config_cache() forces the config tier to be fetched again next cycle."""
+        home_key = ("POST", URL(f"{API_BASE_URL}{Endpoints.GET_HOME_CONFIG}"))
+
+        with aioresponses() as mocked:
+            mocked.post(f"{API_BASE_URL}{Endpoints.LOGIN}", payload=api_login_response)
+            # Config tier must be reachable on both cycles here, so allow repeats.
+            self._register_charger_data_endpoints(mocked, repeat_config=True)
+
+            await client.async_login(TEST_PASSWORD)
+
+            await client.async_get_charger_data(TEST_CHARGER_ID)
+            assert len(mocked.requests[home_key]) == 1
+
+            # Invalidate -> next cycle must refetch the config tier.
+            client.invalidate_config_cache()
+            await client.async_get_charger_data(TEST_CHARGER_ID)
+            assert len(mocked.requests[home_key]) == 2, "invalidate_config_cache() must force a config refetch"
+
+        await client.close()
+
+    @pytest.mark.unit
+    async def test_async_set_invalidates_config_cache(
+        self,
+        client: WellborneApiClient,
+        api_login_response: dict[str, Any],
+    ) -> None:
+        """Test a write method invalidates the config cache so user changes refresh promptly."""
+        response = {"result": 0, "msg": "success", "obj": None}
+
+        with aioresponses() as mocked:
+            mocked.post(f"{API_BASE_URL}{Endpoints.LOGIN}", payload=api_login_response)
+            mocked.post(f"{API_BASE_URL}{Endpoints.SAVE_SOLAR_MODE}", payload=response)
+
+            await client.async_login(TEST_PASSWORD)
+
+            # Simulate a previously-populated cache, then a write must clear the fetch timestamp.
+            client._config_fetched_at = 12345.0
+
+            await client.async_set_solar_mode(TEST_CHARGER_ID, "1")
+
+            # invalidate_config_cache() clears the timestamp, forcing a refetch next cycle.
+            assert client._config_fetched_at is None
+            assert client._config_is_stale() is True
 
         await client.close()
 

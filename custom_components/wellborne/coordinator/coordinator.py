@@ -13,6 +13,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from ..api import (
     ApiConnectionError,
     AuthenticationError,
+    ChargerOfflineError,
     SessionExpiredError,
     WellborneApiClient,
     WellborneData,
@@ -29,6 +30,7 @@ from ..const import (
     DEFAULT_SCHEDULE_TIME,
     DOMAIN,
     IDLE_POLL_INTERVAL,
+    OFFLINE_POLL_INTERVAL,
     OFFLINE_TIMEOUT_COUNT,
 )
 
@@ -148,23 +150,12 @@ class WellborneDataUpdateCoordinator(DataUpdateCoordinator[WellborneData]):
             # Trigger re-authentication flow
             raise ConfigEntryAuthFailed("Authentication failed") from err
 
-        except (ApiConnectionError, TimeoutError) as err:
-            # Track consecutive failures for offline detection.
-            # TimeoutError (asyncio.TimeoutError is TimeoutError in Python 3.11+) is treated
-            # identically to a connection error — both indicate the charger is unreachable.
-            self._consecutive_timeouts += 1
-            self._log_failure("charger_data", f"Connection error (failure #{self._consecutive_timeouts})", err)
-
-            if self._consecutive_timeouts >= OFFLINE_TIMEOUT_COUNT:
-                self._is_online = False
-                _LOGGER.warning(
-                    "Charger marked offline after %d consecutive timeouts",
-                    self._consecutive_timeouts,
-                )
-
-            if isinstance(err, TimeoutError):
-                raise UpdateFailed(f"Charger data fetch timed out after {COORDINATOR_UPDATE_TIMEOUT}s") from err
-            raise UpdateFailed(f"Error communicating with API: {err}") from err
+        except (ChargerOfflineError, ApiConnectionError, TimeoutError) as err:
+            # All three signal the charger is unreachable from the cloud.
+            # ChargerOfflineError: upstream error message marked the charger offline.
+            # ApiConnectionError / TimeoutError: transport-level failure (TimeoutError is
+            # asyncio.TimeoutError in Python 3.11+).
+            return self._handle_offline(err)
 
         except WellborneError as err:
             self._log_failure("charger_data", "Error fetching data", err)
@@ -172,6 +163,36 @@ class WellborneDataUpdateCoordinator(DataUpdateCoordinator[WellborneData]):
 
         else:
             return data
+
+    def _handle_offline(self, err: Exception) -> WellborneData:
+        """Handle an offline signal: count failures, flip offline at threshold, keep entities alive.
+
+        Returns the last-known data when available (so entities stay populated during a backoff),
+        otherwise raises UpdateFailed with the same messages as the prior implementation.
+        """
+        self._consecutive_timeouts += 1
+        self._log_failure("charger_data", f"Charger unreachable (failure #{self._consecutive_timeouts})", err)
+
+        if self._consecutive_timeouts >= OFFLINE_TIMEOUT_COUNT:
+            if self._is_online:
+                _LOGGER.warning(
+                    "Charger marked offline after %d consecutive failures",
+                    self._consecutive_timeouts,
+                )
+            self._is_online = False
+            # Back off polling while offline to stop hammering the vendor cloud.
+            self.update_interval = timedelta(seconds=OFFLINE_POLL_INTERVAL)
+
+        # Keep entities alive with the last known values when we have them.
+        if self.data is not None:
+            return self.data
+
+        # No cached data yet: surface the failure (messages preserved for existing tests).
+        if isinstance(err, TimeoutError):
+            raise UpdateFailed(f"Charger data fetch timed out after {COORDINATOR_UPDATE_TIMEOUT}s") from err
+        if isinstance(err, ApiConnectionError):
+            raise UpdateFailed(f"Error communicating with API: {err}") from err
+        raise UpdateFailed(f"Charger offline: {err}") from err
 
     async def async_start_charging(self, connector_id: str = "1") -> None:
         """Start a charging session."""

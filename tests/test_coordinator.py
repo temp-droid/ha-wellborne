@@ -14,11 +14,18 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.wellborne.api import (
     ApiConnectionError,
     AuthenticationError,
+    ChargerOfflineError,
     SessionExpiredError,
     WellborneData,
     WellborneError,
 )
-from custom_components.wellborne.const import CHARGING_POLL_INTERVAL, DOMAIN, IDLE_POLL_INTERVAL, OFFLINE_TIMEOUT_COUNT
+from custom_components.wellborne.const import (
+    CHARGING_POLL_INTERVAL,
+    DOMAIN,
+    IDLE_POLL_INTERVAL,
+    OFFLINE_POLL_INTERVAL,
+    OFFLINE_TIMEOUT_COUNT,
+)
 from custom_components.wellborne.coordinator import WellborneDataUpdateCoordinator
 
 from .conftest import TEST_CHARGER_ID
@@ -872,4 +879,79 @@ async def test_async_update_data_timeout_marks_offline_after_threshold(
     with pytest.raises(UpdateFailed):
         await coordinator._async_update_data()
 
+
+# =============================================================================
+# Charger Offline (upstream message) Tests
+# =============================================================================
+
+
+async def test_charger_offline_marks_offline_after_threshold(
+    hass: HomeAssistant,
+    mock_api_client_local,
+    coordinator: WellborneDataUpdateCoordinator,
+) -> None:
+    """Test a ChargerOfflineError marks the charger offline after OFFLINE_TIMEOUT_COUNT failures.
+
+    With no cached data, each failure raises UpdateFailed; the charger stays online before
+    the threshold and flips offline once it is crossed.
+    """
+    mock_api_client_local.async_get_charger_data.side_effect = ChargerOfflineError("Charger is not online")
+
+    assert coordinator.data is None
+    assert coordinator.is_online is True
+
+    for _ in range(OFFLINE_TIMEOUT_COUNT - 1):
+        with pytest.raises(UpdateFailed, match="Charger offline"):
+            await coordinator._async_update_data()
+        assert coordinator.is_online is True, "Should still be online before threshold"
+
+    with pytest.raises(UpdateFailed, match="Charger offline"):
+        await coordinator._async_update_data()
+
     assert coordinator.is_online is False
+
+
+async def test_charger_offline_keeps_entities_alive_with_cached_data(
+    hass: HomeAssistant,
+    mock_api_client_local,
+    coordinator: WellborneDataUpdateCoordinator,
+    mock_wellborne_data: WellborneData,
+) -> None:
+    """Test that with prior data, ChargerOfflineError returns cached data and backs off polling."""
+    coordinator.data = mock_wellborne_data
+    mock_api_client_local.async_get_charger_data.side_effect = ChargerOfflineError("Charger offline")
+
+    # Each cycle returns the cached data instead of raising.
+    for _ in range(OFFLINE_TIMEOUT_COUNT):
+        result = await coordinator._async_update_data()
+        assert result is mock_wellborne_data
+
+    # Past the threshold: marked offline and backed off to the offline poll cadence.
+    assert coordinator.is_online is False
+    assert coordinator.update_interval == timedelta(seconds=OFFLINE_POLL_INTERVAL)
+
+
+async def test_charger_offline_restores_online_after_success(
+    hass: HomeAssistant,
+    mock_api_client_local,
+    coordinator: WellborneDataUpdateCoordinator,
+    mock_wellborne_data: WellborneData,
+) -> None:
+    """Test that a success after a ChargerOfflineError restores online state and resets the counter."""
+    mock_api_client_local.async_get_charger_data.side_effect = ChargerOfflineError("offline")
+
+    for _ in range(OFFLINE_TIMEOUT_COUNT):
+        with pytest.raises(UpdateFailed):
+            await coordinator._async_update_data()
+
+    assert coordinator.is_online is False
+    assert coordinator._consecutive_timeouts == OFFLINE_TIMEOUT_COUNT
+
+    mock_api_client_local.async_get_charger_data.side_effect = None
+    mock_api_client_local.async_get_charger_data.return_value = mock_wellborne_data
+
+    result = await coordinator._async_update_data()
+
+    assert result is mock_wellborne_data
+    assert coordinator.is_online is True
+    assert coordinator._consecutive_timeouts == 0

@@ -7,12 +7,20 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 import hashlib
 import logging
+import time
 from typing import TYPE_CHECKING, Any
 
 import aiohttp
 
-from ..const import API_BASE_URL, API_TIMEOUT, API_USER_AGENT, ApiResult, Endpoints
-from .exceptions import ApiConnectionError, ApiResponseError, AuthenticationError, SessionExpiredError, WellborneError
+from ..const import API_BASE_URL, API_TIMEOUT, API_USER_AGENT, CONFIG_REFRESH_INTERVAL, ApiResult, Endpoints
+from .exceptions import (
+    ApiConnectionError,
+    ApiResponseError,
+    AuthenticationError,
+    ChargerOfflineError,
+    SessionExpiredError,
+    WellborneError,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -21,6 +29,10 @@ _LOGGER = logging.getLogger(__name__)
 
 # Keys whose values must never reach debug logs (credentials / session tokens).
 _SENSITIVE_KEYS = frozenset({"password", "token", "wifiPassword"})
+
+# Case-insensitive substrings in upstream error messages that indicate the charger
+# is unreachable from the cloud (vs a generic API error).
+_OFFLINE_MARKERS = ("communication error", "not online", "offline", "response timeout")
 
 
 def _redact_sensitive(value: Any) -> Any:
@@ -194,6 +206,22 @@ class WellborneData:
     load_balancing: LoadBalancingSettings = field(default_factory=LoadBalancingSettings)
 
 
+@dataclass(slots=True, kw_only=True)
+class _ConfigBundle:
+    """Cached snapshot of the rarely-changing config/stats tier."""
+
+    charger_info: ChargerInfo
+    solar_mode: str = "0"
+    delayed: DelayedChargingSettings = field(default_factory=DelayedChargingSettings)
+    scheduled: ScheduledChargingTask = field(default_factory=ScheduledChargingTask)
+    off_peak: OffPeakSettings = field(default_factory=OffPeakSettings)
+    load_balancing: LoadBalancingSettings = field(default_factory=LoadBalancingSettings)
+    firmware: FirmwareStatus | None = None
+    wifi_info: WifiInfo | None = None
+    monthly_statistics: MonthlyStatistics | None = None
+    yearly_statistics: YearlyStatistics | None = None
+
+
 class WellborneApiClient:
     """Client for the Wellborne/ATESS EV Charger API."""
 
@@ -207,6 +235,18 @@ class WellborneApiClient:
         self._session = session
         self._token: str | None = None
         self._own_session = session is None
+        self._config_cache: _ConfigBundle | None = None
+        self._config_fetched_at: float | None = None
+
+    def _config_is_stale(self) -> bool:
+        """Return True if the cached config/stats tier needs refetching."""
+        if self._config_cache is None or self._config_fetched_at is None:
+            return True
+        return time.monotonic() - self._config_fetched_at >= CONFIG_REFRESH_INTERVAL
+
+    def invalidate_config_cache(self) -> None:
+        """Force a config/stats refetch on the next data cycle."""
+        self._config_fetched_at = None
 
     @property
     def is_authenticated(self) -> bool:
@@ -281,6 +321,8 @@ class WellborneApiClient:
         result = data.get("result", data.get("ret", -1))
         if result != ApiResult.SUCCESS:
             msg = data.get("msg", data.get("errMsg", "Unknown error"))
+            if any(marker in str(msg).lower() for marker in _OFFLINE_MARKERS):
+                raise ChargerOfflineError(f"{operation} failed: {msg}")
             raise ApiResponseError(f"{operation} failed: {msg}", result_code=result)
 
     # =========================================================================
@@ -456,6 +498,7 @@ class WellborneApiClient:
             {"chargerId": charger_id, "value": str(current)},
         )
         self._check_response(data, "Set max current")
+        self.invalidate_config_cache()
 
     async def async_set_solar_mode(self, charger_id: str, mode: str) -> None:
         """Set solar charging mode (0=off, 1=eco, 2=pure solar)."""
@@ -464,6 +507,7 @@ class WellborneApiClient:
             {"chargerId": charger_id, "solarChargingMode": mode},
         )
         self._check_response(data, "Set solar mode")
+        self.invalidate_config_cache()
 
     async def async_set_connector_lock(self, charger_id: str, *, enabled: bool) -> None:
         """Enable or disable connector lock."""
@@ -472,6 +516,7 @@ class WellborneApiClient:
             {"chargerId": charger_id, "value": str(enabled).lower()},
         )
         self._check_response(data, "Set connector lock")
+        self.invalidate_config_cache()
 
     # =========================================================================
     # Scheduled Charging
@@ -523,6 +568,7 @@ class WellborneApiClient:
             },
         )
         self._check_response(data, "Set scheduled charging")
+        self.invalidate_config_cache()
 
     # =========================================================================
     # Delayed Charging
@@ -565,6 +611,7 @@ class WellborneApiClient:
             },
         )
         self._check_response(data, "Set delayed charging")
+        self.invalidate_config_cache()
 
     # =========================================================================
     # Transaction History
@@ -610,6 +657,7 @@ class WellborneApiClient:
             {"chargerId": charger_id, "value": str(power_watts)},
         )
         self._check_response(data, "Set max power")
+        self.invalidate_config_cache()
 
     async def async_set_lcd_enabled(self, charger_id: str, *, enabled: bool) -> None:
         """Enable or disable LCD display."""
@@ -618,6 +666,7 @@ class WellborneApiClient:
             {"chargerId": charger_id, "value": "enable" if enabled else "disable"},
         )
         self._check_response(data, "Set LCD")
+        self.invalidate_config_cache()
 
     async def async_set_low_power_reserve(self, charger_id: str, *, enabled: bool) -> None:
         """Enable or disable low power reserve mode."""
@@ -626,6 +675,7 @@ class WellborneApiClient:
             {"chargerId": charger_id, "value": "Enable" if enabled else "Disable"},
         )
         self._check_response(data, "Set low power reserve")
+        self.invalidate_config_cache()
 
     async def async_get_wifi_info(self, charger_id: str) -> dict[str, Any]:
         """Get WiFi information."""
@@ -660,6 +710,7 @@ class WellborneApiClient:
             },
         )
         self._check_response(data, "Set load balancing")
+        self.invalidate_config_cache()
 
     # =========================================================================
     # Time Rates
@@ -682,6 +733,7 @@ class WellborneApiClient:
             {"chargerId": charger_id, "rates": rates},
         )
         self._check_response(data, "Save time rate")
+        self.invalidate_config_cache()
 
     # =========================================================================
     # Off-Peak Charging (v2 API)
@@ -714,12 +766,14 @@ class WellborneApiClient:
             },
         )
         self._check_response(data, "Set off-peak time")
+        self.invalidate_config_cache()
 
     async def async_set_off_peak_enabled(self, charger_id: str, *, enabled: bool) -> None:
         """Enable or disable off-peak charging mode."""
         endpoint = Endpoints.SET_OFF_PEAK_ENABLE if enabled else Endpoints.SET_OFF_PEAK_DISABLE
         data = await self._request(endpoint, {"chargerId": charger_id})
         self._check_response(data, "Set off-peak enabled")
+        self.invalidate_config_cache()
 
     # =========================================================================
     # Firmware
@@ -808,6 +862,7 @@ class WellborneApiClient:
             },
         )
         self._check_response(data, "Set scheduled charging by energy")
+        self.invalidate_config_cache()
 
     async def async_set_scheduled_by_full(
         self,
@@ -832,6 +887,7 @@ class WellborneApiClient:
             },
         )
         self._check_response(data, "Set scheduled charging by full")
+        self.invalidate_config_cache()
 
     async def async_set_scheduled_by_end_time(
         self,
@@ -858,100 +914,88 @@ class WellborneApiClient:
             },
         )
         self._check_response(data, "Set scheduled charging by end time")
+        self.invalidate_config_cache()
 
     # =========================================================================
     # Combined Data Fetch
     # =========================================================================
 
     async def async_get_charger_data(self, charger_id: str) -> WellborneData:
-        """Get all data for a charger in one call."""
-        # Get charger info first
+        """Get all data for a charger in one call.
+
+        Per cycle: probe the charger via the config endpoint (fatal — propagates
+        ChargerOfflineError / Timeout / ApiConnectionError to abort the cycle and
+        signal offline), fetch live status (is_charging + transactions), and refresh
+        the rarely-changing config/stats tier only when its cache is stale.
+        """
+        # Resolve charger info first (fatal if the charger is not on the account).
         chargers = await self.async_get_chargers()
         charger_info = next((c for c in chargers if c.charger_id == charger_id), None)
-
         if not charger_info:
             raise ApiResponseError(f"Charger {charger_id} not found")
 
-        # Fetch status and config concurrently with error handling
-        # Use shorter timeout for the batch to prevent blocking
+        # Probe + live config (fatal): a ChargerOfflineError / Timeout / ApiConnectionError
+        # here both detects offline AND aborts before hammering the rest of the endpoints.
+        config = await self.async_get_charger_config(charger_id)
+
+        # Live charging status (tolerate failure -> not charging)
         try:
-            async with asyncio.timeout(45):  # Total timeout for core data
-                results = await asyncio.gather(
-                    self.async_is_charging(charger_id),
-                    self.async_get_charger_config(charger_id),
-                    self.async_get_home_config(charger_id),
-                    self.async_get_delayed_charging(charger_id),
-                    self.async_get_scheduled_charging(charger_id),
-                    self.async_get_off_peak_time(charger_id),
-                    return_exceptions=True,
-                )
-        except TimeoutError:
-            _LOGGER.warning("Timeout fetching core charger data, using defaults")
-            results = [
-                False,
-                {},
-                {},
-                DelayedChargingSettings(),
-                ScheduledChargingTask(),
-                {},
-            ]
+            is_charging = await self.async_is_charging(charger_id)
+        except WellborneError as err:
+            _LOGGER.warning("Failed to fetch is_charging: %s", err)
+            is_charging = False
 
-        # Handle results - use defaults for any failed calls.
-        # gather(return_exceptions=True) yields T | BaseException, so narrow
-        # against BaseException to exclude e.g. CancelledError from the value.
-        is_charging = results[0] if not isinstance(results[0], BaseException) else False
-        config = results[1] if not isinstance(results[1], BaseException) else {}
-        home_config = results[2] if not isinstance(results[2], BaseException) else {}
-        delayed = results[3] if not isinstance(results[3], BaseException) else DelayedChargingSettings()
-        scheduled = results[4] if not isinstance(results[4], BaseException) else ScheduledChargingTask()
-        off_peak_data = results[5] if not isinstance(results[5], BaseException) else {}
+        # Live transactions block (meter values, session start, lifetime energy, last session)
+        (
+            meter_values,
+            transaction_id,
+            lifetime_energy,
+            session_start_time,
+            last_session,
+        ) = await self._fetch_transactions_block(charger_id, is_charging=is_charging)
 
-        # Log any errors
-        for i, result in enumerate(results):
-            if isinstance(result, BaseException):
-                endpoint_names = [
-                    "is_charging",
-                    "config",
-                    "home_config",
-                    "delayed",
-                    "scheduled",
-                    "off_peak",
-                ]
-                _LOGGER.warning("Failed to fetch %s: %s", endpoint_names[i], result)
-
-        # Parse off-peak settings
-        # The GET endpoint returns offPeakTimes array, while SET uses top-level fields.
-        # Read from offPeakTimes (what GET returns) as primary source.
-        _LOGGER.debug("Off-peak settings: %s", _redact_sensitive(off_peak_data))
-        off_peak_enabled = str(off_peak_data.get("offPeakEnable", "")).lower() == "enable"
-
-        # Read from offPeakTimes array (GET response format)
-        weekday_start = "00:00"
-        weekday_end = "00:00"
-        off_peak_times = off_peak_data.get("offPeakTimes", [])
-        if off_peak_times and isinstance(off_peak_times, list) and len(off_peak_times) > 0:
-            first_period = off_peak_times[0]
-            if isinstance(first_period, dict):
-                weekday_start = first_period.get("startTime") or "00:00"
-                weekday_end = first_period.get("endTime") or "00:00"
-
-        off_peak = OffPeakSettings(
-            enabled=off_peak_enabled,
-            weekday_start=weekday_start,
-            weekday_end=weekday_end,
-            weekend_start=off_peak_data.get("weekendStart", "00:00"),
-            weekend_end=off_peak_data.get("weekendEnd", "00:00"),
-        )
+        # Config/stats tier: refresh only when the cache is stale, else reuse.
+        if self._config_is_stale():
+            self._config_cache = await self._fetch_config_bundle(charger_id, charger_info=charger_info)
+            self._config_fetched_at = time.monotonic()
+        bundle = self._config_cache
+        if bundle is None:  # pragma: no cover - cache is always populated above
+            bundle = await self._fetch_config_bundle(charger_id, charger_info=charger_info)
 
         status = ChargerStatus(
             is_charging=is_charging,
-            solar_mode=str(home_config.get("solarChargingMode", "0")),
+            solar_mode=bundle.solar_mode,
             max_current=self._safe_float(config.get("maximumOutputCurrent"), 32.0),
             connector_lock=str(config.get("connectorLock", "")).lower() == "true",
             lcd_enabled=str(config.get("lcd", "")).lower() == "enable",
             low_power_reserve=str(config.get("lowPowerReserve", "")).lower() == "enable",
         )
 
+        return WellborneData(
+            charger=bundle.charger_info,
+            status=status,
+            meter_values=meter_values,
+            delayed_charging=bundle.delayed,
+            scheduled_charging=bundle.scheduled,
+            off_peak=bundle.off_peak,
+            transaction_id=transaction_id,
+            lifetime_energy=lifetime_energy,
+            session_start_time=session_start_time,
+            last_session=last_session,
+            monthly_statistics=bundle.monthly_statistics,
+            yearly_statistics=bundle.yearly_statistics,
+            firmware=bundle.firmware,
+            wifi_info=bundle.wifi_info,
+            load_balancing=bundle.load_balancing,
+        )
+
+    async def _fetch_transactions_block(
+        self,
+        charger_id: str,
+        *,
+        is_charging: bool,
+    ) -> tuple[MeterValues | None, str | None, float, datetime | None, LastSessionData | None]:
+        """Fetch the live transactions block (meter values, lifetime energy, sessions)."""
         # Get meter values if charging and calculate lifetime energy
         meter_values = None
         transaction_id = None
@@ -1036,6 +1080,80 @@ class WellborneApiClient:
         except WellborneError as err:
             _LOGGER.warning("Could not get transactions: %s", err)
 
+        return meter_values, transaction_id, lifetime_energy, session_start_time, last_session
+
+    async def _fetch_config_bundle(
+        self,
+        charger_id: str,
+        *,
+        charger_info: ChargerInfo,
+    ) -> _ConfigBundle:
+        """Fetch and parse the rarely-changing config/stats tier into a cache bundle."""
+        # Fetch config tier concurrently with error handling
+        # Use shorter timeout for the batch to prevent blocking
+        try:
+            async with asyncio.timeout(45):  # Total timeout for core data
+                results = await asyncio.gather(
+                    self.async_get_home_config(charger_id),
+                    self.async_get_delayed_charging(charger_id),
+                    self.async_get_scheduled_charging(charger_id),
+                    self.async_get_off_peak_time(charger_id),
+                    return_exceptions=True,
+                )
+        except TimeoutError:
+            _LOGGER.warning("Timeout fetching core charger data, using defaults")
+            results = [
+                {},
+                DelayedChargingSettings(),
+                ScheduledChargingTask(),
+                {},
+            ]
+
+        # Handle results - use defaults for any failed calls.
+        # gather(return_exceptions=True) yields T | BaseException, so narrow
+        # against BaseException to exclude e.g. CancelledError from the value.
+        home_config = results[0] if not isinstance(results[0], BaseException) else {}
+        delayed = results[1] if not isinstance(results[1], BaseException) else DelayedChargingSettings()
+        scheduled = results[2] if not isinstance(results[2], BaseException) else ScheduledChargingTask()
+        off_peak_data = results[3] if not isinstance(results[3], BaseException) else {}
+
+        # Log any errors
+        for i, result in enumerate(results):
+            if isinstance(result, BaseException):
+                endpoint_names = [
+                    "home_config",
+                    "delayed",
+                    "scheduled",
+                    "off_peak",
+                ]
+                _LOGGER.warning("Failed to fetch %s: %s", endpoint_names[i], result)
+
+        # Parse off-peak settings
+        # The GET endpoint returns offPeakTimes array, while SET uses top-level fields.
+        # Read from offPeakTimes (what GET returns) as primary source.
+        _LOGGER.debug("Off-peak settings: %s", _redact_sensitive(off_peak_data))
+        off_peak_enabled = str(off_peak_data.get("offPeakEnable", "")).lower() == "enable"
+
+        # Read from offPeakTimes array (GET response format)
+        weekday_start = "00:00"
+        weekday_end = "00:00"
+        off_peak_times = off_peak_data.get("offPeakTimes", [])
+        if off_peak_times and isinstance(off_peak_times, list) and len(off_peak_times) > 0:
+            first_period = off_peak_times[0]
+            if isinstance(first_period, dict):
+                weekday_start = first_period.get("startTime") or "00:00"
+                weekday_end = first_period.get("endTime") or "00:00"
+
+        off_peak = OffPeakSettings(
+            enabled=off_peak_enabled,
+            weekday_start=weekday_start,
+            weekday_end=weekday_end,
+            weekend_start=off_peak_data.get("weekendStart", "00:00"),
+            weekend_end=off_peak_data.get("weekendEnd", "00:00"),
+        )
+
+        solar_mode = str(home_config.get("solarChargingMode", "0"))
+
         # Fetch secondary data in parallel with timeout to prevent blocking
         # Get current month and year for statistics
         now = datetime.now(tz=UTC)
@@ -1111,60 +1229,59 @@ class WellborneApiClient:
         if isinstance(lb_data, BaseException):
             _LOGGER.warning("Could not get load balancing settings: %s", lb_data)
         elif lb_data:
-            # API returns enablePowerAllocationCharge as string '0' or '1'
-            enabled_str = lb_data.get("enablePowerAllocationCharge", "0")
-            enabled = enabled_str == "1"
-            # API returns totalDomesticPower in kW, we store it as the max_current field
-            # (this is the domestic power limit, not current, but we use the same field)
-            total_power = int(float(lb_data.get("totalDomesticPower", "32") or "32"))
+            load_balancing = self._parse_load_balancing(lb_data)
 
-            # Parse external meter data if available
-            external_meter = None
-            ext_data = lb_data.get("externalCurrent")
-            if ext_data and isinstance(ext_data, dict):
-                # Helper to parse values like '30A', '225V', '14344W'
-                def parse_value(val: Any) -> float:
-                    if val is None:
-                        return 0.0
-                    if isinstance(val, (int, float)):
-                        return float(val)
-                    # Remove unit suffix (A, V, W) and convert
-                    val_str = str(val).rstrip("AVWavw")
-                    try:
-                        return float(val_str)
-                    except ValueError:
-                        return 0.0
-
-                external_meter = ExternalMeterData(
-                    current_l1=parse_value(ext_data.get("ucurrent")),
-                    current_l2=parse_value(ext_data.get("vcurrent")),
-                    current_l3=parse_value(ext_data.get("wcurrent")),
-                    voltage_l1=parse_value(ext_data.get("uvoltage")),
-                    voltage_l2=parse_value(ext_data.get("vvoltage")),
-                    voltage_l3=parse_value(ext_data.get("wvoltage")),
-                    power=parse_value(ext_data.get("power")),
-                )
-
-            load_balancing = LoadBalancingSettings(
-                enabled=enabled,
-                max_current=total_power,  # Note: This is actually kW, not Amps
-                external_meter=external_meter,
-            )
-
-        return WellborneData(
-            charger=charger_info,
-            status=status,
-            meter_values=meter_values,
-            delayed_charging=delayed,
-            scheduled_charging=scheduled,
+        return _ConfigBundle(
+            charger_info=charger_info,
+            solar_mode=solar_mode,
+            delayed=delayed,
+            scheduled=scheduled,
             off_peak=off_peak,
-            transaction_id=transaction_id,
-            lifetime_energy=lifetime_energy,
-            session_start_time=session_start_time,
-            last_session=last_session,
-            monthly_statistics=monthly_statistics,
-            yearly_statistics=yearly_statistics,
+            load_balancing=load_balancing,
             firmware=firmware,
             wifi_info=wifi_info,
-            load_balancing=load_balancing,
+            monthly_statistics=monthly_statistics,
+            yearly_statistics=yearly_statistics,
+        )
+
+    def _parse_load_balancing(self, lb_data: dict[str, Any]) -> LoadBalancingSettings:
+        """Parse a load-balancing response (with optional external-meter data)."""
+        # API returns enablePowerAllocationCharge as string '0' or '1'
+        enabled_str = lb_data.get("enablePowerAllocationCharge", "0")
+        enabled = enabled_str == "1"
+        # API returns totalDomesticPower in kW, we store it as the max_current field
+        # (this is the domestic power limit, not current, but we use the same field)
+        total_power = int(float(lb_data.get("totalDomesticPower", "32") or "32"))
+
+        # Parse external meter data if available
+        external_meter = None
+        ext_data = lb_data.get("externalCurrent")
+        if ext_data and isinstance(ext_data, dict):
+            # Helper to parse values like '30A', '225V', '14344W'
+            def parse_value(val: Any) -> float:
+                if val is None:
+                    return 0.0
+                if isinstance(val, (int, float)):
+                    return float(val)
+                # Remove unit suffix (A, V, W) and convert
+                val_str = str(val).rstrip("AVWavw")
+                try:
+                    return float(val_str)
+                except ValueError:
+                    return 0.0
+
+            external_meter = ExternalMeterData(
+                current_l1=parse_value(ext_data.get("ucurrent")),
+                current_l2=parse_value(ext_data.get("vcurrent")),
+                current_l3=parse_value(ext_data.get("wcurrent")),
+                voltage_l1=parse_value(ext_data.get("uvoltage")),
+                voltage_l2=parse_value(ext_data.get("vvoltage")),
+                voltage_l3=parse_value(ext_data.get("wvoltage")),
+                power=parse_value(ext_data.get("power")),
+            )
+
+        return LoadBalancingSettings(
+            enabled=enabled,
+            max_current=total_power,  # Note: This is actually kW, not Amps
+            external_meter=external_meter,
         )

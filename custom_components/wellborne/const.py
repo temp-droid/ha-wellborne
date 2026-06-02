@@ -26,6 +26,8 @@ IDLE_POLL_INTERVAL: Final = 120  # seconds when idle
 
 # Offline detection
 OFFLINE_TIMEOUT_COUNT: Final = 3  # Number of consecutive timeouts before marking offline
+CONFIG_REFRESH_INTERVAL: Final = 900  # seconds; rarely-changing config/stats refresh cadence
+OFFLINE_POLL_INTERVAL: Final = 300  # seconds; backoff polling cadence while charger is offline
 
 # Coordinator fetch timeout: bounds the entire multi-request charger-data fetch
 # (charger list ~30s + meter/config batch ~45s), so must exceed their aggregate worst case.
