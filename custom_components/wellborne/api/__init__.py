@@ -24,6 +24,7 @@ from .exceptions import (
     SessionExpiredError,
     WellborneError,
 )
+from .sse import SseLiveSnapshot, WellborneSseClient, parse_sse_obj
 
 __all__ = [
     "ApiConnectionError",
@@ -41,9 +42,12 @@ __all__ = [
     "OffPeakSettings",
     "ScheduledChargingTask",
     "SessionExpiredError",
+    "SseLiveSnapshot",
     "WellborneApiClient",
     "WellborneData",
     "WellborneError",
+    "WellborneSseClient",
     "WifiInfo",
     "YearlyStatistics",
+    "parse_sse_obj",
 ]

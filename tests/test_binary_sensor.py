@@ -8,19 +8,41 @@ from homeassistant.core import HomeAssistant
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.wellborne.api.sse import SseLiveSnapshot
 from custom_components.wellborne.binary_sensor import async_setup_entry
 from custom_components.wellborne.const import DOMAIN
 
 from .conftest import TEST_CHARGER_ID
 
 
+def _connected_snapshot(*, power_w: float | None = 3680.0) -> SseLiveSnapshot:
+    """Build a fresh, connected live snapshot (status>=3) for state-override tests."""
+    return SseLiveSnapshot(
+        power_w=power_w,
+        current_l1=16.0,
+        current_l2=16.0,
+        current_l3=16.0,
+        voltage_l1=230.0,
+        voltage_l2=230.0,
+        voltage_l3=230.0,
+        energy_kwh=10.5,
+        duration_seconds=5400,
+        duration_minutes=90,
+        cost=0.04,
+        cost_text="0.04€",
+        status=3,
+        connected=True,
+    )
+
+
 @pytest.fixture
 def mock_coordinator(mock_wellborne_data):
-    """Create a mock coordinator."""
+    """Create a mock coordinator (idle: no fresh live snapshot)."""
     coordinator = MagicMock()
     coordinator.data = mock_wellborne_data
     coordinator.charger_id = TEST_CHARGER_ID
     coordinator.last_update_success = True
+    coordinator.live_snapshot = None
     # Mock the available property from CoordinatorEntity
     type(coordinator).available = PropertyMock(return_value=True)
     return coordinator
@@ -28,11 +50,12 @@ def mock_coordinator(mock_wellborne_data):
 
 @pytest.fixture
 def mock_coordinator_charging(mock_wellborne_data_charging):
-    """Create a mock coordinator with charging active."""
+    """Create a mock coordinator with charging active (REST path, no live snapshot)."""
     coordinator = MagicMock()
     coordinator.data = mock_wellborne_data_charging
     coordinator.charger_id = TEST_CHARGER_ID
     coordinator.last_update_success = True
+    coordinator.live_snapshot = None
     type(coordinator).available = PropertyMock(return_value=True)
     return coordinator
 
@@ -44,6 +67,7 @@ def mock_coordinator_unavailable(mock_wellborne_data):
     coordinator.data = None
     coordinator.charger_id = TEST_CHARGER_ID
     coordinator.last_update_success = False
+    coordinator.live_snapshot = None
     type(coordinator).available = PropertyMock(return_value=False)
     return coordinator
 
@@ -116,6 +140,7 @@ async def test_charging_sensor_updates_when_charging_starts(
     coordinator.data = mock_wellborne_data
     coordinator.charger_id = TEST_CHARGER_ID
     coordinator.last_update_success = True
+    coordinator.live_snapshot = None
 
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][mock_config_entry.entry_id] = coordinator
@@ -475,3 +500,109 @@ async def test_charger_online_sensor_does_not_depend_on_coordinator_data(
     assert charger_online_sensor is not None
     # is_online=True regardless of data=None (special case in is_on property)
     assert charger_online_sensor.is_on is True
+
+
+# =============================================================================
+# Live SSE snapshot overrides REST for charging / vehicle_connected state
+# =============================================================================
+
+
+async def _setup_binary_sensors(hass, mock_config_entry, coordinator):
+    """Set up the binary sensors with the given coordinator and return them."""
+    mock_config_entry.add_to_hass(hass)
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN][mock_config_entry.entry_id] = coordinator
+
+    entities_added = []
+
+    def capture_entities(entities):
+        entities_added.extend(entities)
+
+    await async_setup_entry(hass, mock_config_entry, capture_entities)
+    await hass.async_block_till_done()
+    return entities_added
+
+
+async def test_charging_sensor_on_from_live_snapshot(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_coordinator,
+) -> None:
+    """Charging is ON from a fresh connected snapshot even when REST reports not charging."""
+    # REST data says idle (mock_wellborne_data is not charging), live snapshot says connected.
+    mock_coordinator.live_snapshot = _connected_snapshot()
+
+    entities_added = await _setup_binary_sensors(hass, mock_config_entry, mock_coordinator)
+
+    charging_sensor = next(e for e in entities_added if e.entity_description.key == "charging")
+    assert charging_sensor.is_on is True
+
+
+async def test_charging_sensor_on_from_live_snapshot_power_zero(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_coordinator,
+) -> None:
+    """A connected snapshot with power_w=0 (plugged, not drawing) still reads as charging."""
+    mock_coordinator.live_snapshot = _connected_snapshot(power_w=0.0)
+
+    entities_added = await _setup_binary_sensors(hass, mock_config_entry, mock_coordinator)
+
+    charging_sensor = next(e for e in entities_added if e.entity_description.key == "charging")
+    assert charging_sensor.is_on is True
+
+
+async def test_charging_sensor_falls_back_to_rest_when_no_snapshot(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_coordinator,
+) -> None:
+    """With no live snapshot, charging follows REST is_charging (idle -> off)."""
+    mock_coordinator.live_snapshot = None
+
+    entities_added = await _setup_binary_sensors(hass, mock_config_entry, mock_coordinator)
+
+    charging_sensor = next(e for e in entities_added if e.entity_description.key == "charging")
+    assert charging_sensor.is_on is False
+
+
+async def test_vehicle_connected_on_from_live_snapshot(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_coordinator,
+) -> None:
+    """Vehicle connected is ON from a fresh connected snapshot even when REST is idle."""
+    mock_coordinator.live_snapshot = _connected_snapshot()
+
+    entities_added = await _setup_binary_sensors(hass, mock_config_entry, mock_coordinator)
+
+    vehicle_connected = next(e for e in entities_added if e.entity_description.key == "vehicle_connected")
+    assert vehicle_connected.is_on is True
+
+
+async def test_vehicle_connected_on_from_live_snapshot_power_zero(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_coordinator,
+) -> None:
+    """A connected snapshot with power_w=0 still reports the vehicle as connected."""
+    mock_coordinator.live_snapshot = _connected_snapshot(power_w=0.0)
+
+    entities_added = await _setup_binary_sensors(hass, mock_config_entry, mock_coordinator)
+
+    vehicle_connected = next(e for e in entities_added if e.entity_description.key == "vehicle_connected")
+    assert vehicle_connected.is_on is True
+
+
+async def test_vehicle_connected_none_when_idle_and_no_snapshot(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_coordinator,
+) -> None:
+    """Without a live snapshot and idle REST, vehicle_connected stays Unknown (None)."""
+    mock_coordinator.live_snapshot = None
+
+    entities_added = await _setup_binary_sensors(hass, mock_config_entry, mock_coordinator)
+
+    vehicle_connected = next(e for e in entities_added if e.entity_description.key == "vehicle_connected")
+    assert vehicle_connected.is_on is None

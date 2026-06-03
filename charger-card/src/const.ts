@@ -22,6 +22,8 @@ export const ENTITY_KEYS = {
   energy: 'energy',
   // sensor.*_current          (key="current",          name "Current L1")
   current: 'current',
+  // sensor.*_max_current      (key="max_current",      name "Max Current") — configured limit (A)
+  max_current: 'max_current',
   // sensor.*_session_duration (key="session_duration", name "Session Duration")
   session_duration: 'session_duration',
   // sensor.*_status           (key="status",           name "Status", enum: idle|charging|pending)
@@ -36,6 +38,8 @@ export const ENTITY_KEYS = {
   last_session_energy: 'last_session_energy',
   // sensor.*_last_session_duration (key="last_session_duration", name "Last Session Duration")
   last_session_duration: 'last_session_duration',
+  // sensor.*_session_cost   (key="session_cost", name "Session Cost") — live session cost (€) from SSE
+  session_cost: 'session_cost',
   // sensor.*_wifi_ssid        (key="wifi_ssid", name "WiFi Network") — DISABLED by default
   wifi_ssid: 'wifi_ssid',
   // binary_sensor.*_charging          (key="charging",          name "Charging")

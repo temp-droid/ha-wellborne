@@ -2,43 +2,77 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from dataclasses import replace
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, PropertyMock
 
 from freezegun import freeze_time
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
-from homeassistant.const import UnitOfElectricCurrent, UnitOfElectricPotential, UnitOfEnergy, UnitOfPower
+from homeassistant.const import (
+    EntityCategory,
+    UnitOfElectricCurrent,
+    UnitOfElectricPotential,
+    UnitOfEnergy,
+    UnitOfPower,
+)
 from homeassistant.core import HomeAssistant
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.wellborne.api import WifiInfo
+from custom_components.wellborne.api.sse import SseLiveSnapshot
 from custom_components.wellborne.const import DOMAIN
 from custom_components.wellborne.sensor import async_setup_entry
 
 from .conftest import TEST_CHARGER_ID
 
 
+def _charging_snapshot(*, duration_minutes: int = 90) -> SseLiveSnapshot:
+    """Build a fresh, connected live snapshot mirroring mock_meter_values.
+
+    Values match the REST mock_meter_values fixture (power 3680 W, voltage 230 V, current 16 A,
+    energy 10.5 kWh) so the live-path assertions stay readable.
+    """
+    return SseLiveSnapshot(
+        power_w=3680.0,
+        current_l1=16.0,
+        current_l2=16.0,
+        current_l3=16.0,
+        voltage_l1=230.0,
+        voltage_l2=230.0,
+        voltage_l3=230.0,
+        energy_kwh=10.5,
+        duration_seconds=duration_minutes * 60,
+        duration_minutes=duration_minutes,
+        cost=0.04,
+        cost_text="0.04€",
+        status=3,
+        connected=True,
+    )
+
+
 @pytest.fixture
 def mock_coordinator(mock_wellborne_data, mock_config_entry):
-    """Create a mock coordinator."""
+    """Create a mock coordinator (idle: no fresh live snapshot)."""
     coordinator = MagicMock()
     coordinator.data = mock_wellborne_data
     coordinator.charger_id = TEST_CHARGER_ID
     coordinator.last_update_success = True
     coordinator.config_entry = mock_config_entry
+    coordinator.live_snapshot = None
     type(coordinator).available = PropertyMock(return_value=True)
     return coordinator
 
 
 @pytest.fixture
 def mock_coordinator_charging(mock_wellborne_data_charging, mock_config_entry):
-    """Create a mock coordinator with active charging."""
+    """Create a mock coordinator with active charging and a fresh live snapshot."""
     coordinator = MagicMock()
     coordinator.data = mock_wellborne_data_charging
     coordinator.charger_id = TEST_CHARGER_ID
     coordinator.last_update_success = True
     coordinator.config_entry = mock_config_entry
+    coordinator.live_snapshot = _charging_snapshot()
     type(coordinator).available = PropertyMock(return_value=True)
     return coordinator
 
@@ -248,37 +282,39 @@ async def test_sensor_unique_ids(
 # =============================================================================
 
 
-async def test_session_duration_sensor_shows_minutes_when_charging(
+async def test_session_duration_sensor_from_live_snapshot(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
-    mock_coordinator_with_session_start,
+    mock_coordinator_charging,
 ) -> None:
-    """Test session duration sensor shows time since session started."""
-    frozen_now = datetime(2024, 6, 15, 12, 0, 0, tzinfo=UTC)
-    mock_coordinator_with_session_start.data.session_start_time = frozen_now - timedelta(minutes=90)
+    """Session duration comes from the live snapshot (charingTimeText), NOT now - start.
+
+    Regression guard for the 177h bug: the value is read from the fresh SSE snapshot's
+    duration_minutes (parsed from charingTimeText), independent of any wall clock.
+    """
+    mock_coordinator_charging.live_snapshot = _charging_snapshot(duration_minutes=42)
 
     mock_config_entry.add_to_hass(hass)
 
     hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN][mock_config_entry.entry_id] = mock_coordinator_with_session_start
+    hass.data[DOMAIN][mock_config_entry.entry_id] = mock_coordinator_charging
 
     entities_added = []
 
     def capture_entities(entities):
         entities_added.extend(entities)
 
-    with freeze_time(frozen_now):
+    # A wildly different wall clock must NOT affect the duration (proves it is snapshot-driven).
+    with freeze_time(datetime(2030, 1, 1, 0, 0, 0, tzinfo=UTC)):
         await async_setup_entry(hass, mock_config_entry, capture_entities)
         await hass.async_block_till_done()
 
-        # Find the session duration sensor
         session_duration_sensor = next(
             (e for e in entities_added if "session_duration" in e.unique_id),
             None,
         )
         assert session_duration_sensor is not None
-        # Session started exactly 90 minutes before frozen_now
-        assert session_duration_sensor.native_value == 90
+        assert session_duration_sensor.native_value == 42
         assert session_duration_sensor.device_class == SensorDeviceClass.DURATION
         assert session_duration_sensor.native_unit_of_measurement == "min"
 
@@ -370,6 +406,82 @@ async def test_status_sensor_shows_idle_when_not_charging(
         (e for e in entities_added if e.unique_id.endswith("_status")),
         None,
     )
+    assert status_sensor is not None
+    assert status_sensor.native_value == "idle"
+
+
+async def test_status_sensor_charging_from_live_snapshot_when_rest_idle(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_coordinator,
+) -> None:
+    """A fresh connected snapshot overrides idle REST data -> status 'charging'."""
+    # mock_coordinator wraps mock_wellborne_data (is_charging False) but has a live snapshot.
+    mock_coordinator.live_snapshot = _charging_snapshot()
+
+    mock_config_entry.add_to_hass(hass)
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN][mock_config_entry.entry_id] = mock_coordinator
+
+    entities_added = []
+
+    def capture_entities(entities):
+        entities_added.extend(entities)
+
+    await async_setup_entry(hass, mock_config_entry, capture_entities)
+    await hass.async_block_till_done()
+
+    status_sensor = next((e for e in entities_added if e.unique_id.endswith("_status")), None)
+    assert status_sensor is not None
+    assert status_sensor.native_value == "charging"
+
+
+async def test_status_sensor_charging_from_live_snapshot_power_zero(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_coordinator,
+) -> None:
+    """A connected snapshot with power_w=0 (plugged, not drawing) still reads 'charging'."""
+    mock_coordinator.live_snapshot = replace(_charging_snapshot(), power_w=0.0)
+
+    mock_config_entry.add_to_hass(hass)
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN][mock_config_entry.entry_id] = mock_coordinator
+
+    entities_added = []
+
+    def capture_entities(entities):
+        entities_added.extend(entities)
+
+    await async_setup_entry(hass, mock_config_entry, capture_entities)
+    await hass.async_block_till_done()
+
+    status_sensor = next((e for e in entities_added if e.unique_id.endswith("_status")), None)
+    assert status_sensor is not None
+    assert status_sensor.native_value == "charging"
+
+
+async def test_status_sensor_falls_back_to_rest_when_no_snapshot(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_coordinator,
+) -> None:
+    """With no live snapshot, status follows REST (idle data -> 'idle')."""
+    mock_coordinator.live_snapshot = None
+
+    mock_config_entry.add_to_hass(hass)
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN][mock_config_entry.entry_id] = mock_coordinator
+
+    entities_added = []
+
+    def capture_entities(entities):
+        entities_added.extend(entities)
+
+    await async_setup_entry(hass, mock_config_entry, capture_entities)
+    await hass.async_block_till_done()
+
+    status_sensor = next((e for e in entities_added if e.unique_id.endswith("_status")), None)
     assert status_sensor is not None
     assert status_sensor.native_value == "idle"
 
@@ -595,6 +707,108 @@ async def test_wifi_ssid_sensor_unique_id(
 # =============================================================================
 # L2/L3 Voltage and Current Sensors (non-None branch)
 # =============================================================================
+
+
+# =============================================================================
+# Connection Status (diagnostic enum) Sensor Tests
+# =============================================================================
+
+
+def _make_connection_status_coordinator(connection_status: str, *, data) -> MagicMock:
+    """Build a mock coordinator exposing a connection_status property."""
+    coordinator = MagicMock()
+    coordinator.data = data
+    coordinator.charger_id = TEST_CHARGER_ID
+    coordinator.last_update_success = True
+    coordinator.connection_status = connection_status
+    type(coordinator).available = PropertyMock(return_value=True)
+    return coordinator
+
+
+async def test_connection_status_sensor_options_and_metadata(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_wellborne_data,
+) -> None:
+    """Test connection_status sensor exposes the exact options, enum device class and diagnostic category."""
+    coordinator = _make_connection_status_coordinator("online", data=mock_wellborne_data)
+
+    mock_config_entry.add_to_hass(hass)
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN][mock_config_entry.entry_id] = coordinator
+
+    entities_added = []
+
+    def capture_entities(entities):
+        entities_added.extend(entities)
+
+    await async_setup_entry(hass, mock_config_entry, capture_entities)
+    await hass.async_block_till_done()
+
+    sensor = next((e for e in entities_added if e.entity_description.key == "connection_status"), None)
+    assert sensor is not None
+    assert sensor.unique_id == f"{TEST_CHARGER_ID}_connection_status"
+    assert sensor.device_class == SensorDeviceClass.ENUM
+    assert sensor.options == ["online", "charger_offline", "cloud_unreachable"]
+    assert sensor.entity_description.entity_category == EntityCategory.DIAGNOSTIC
+    assert sensor.native_value == "online"
+
+
+@pytest.mark.parametrize(
+    "status",
+    ["online", "charger_offline", "cloud_unreachable"],
+)
+async def test_connection_status_sensor_reflects_coordinator_property(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_wellborne_data,
+    status: str,
+) -> None:
+    """Test connection_status sensor reports the coordinator property value."""
+    coordinator = _make_connection_status_coordinator(status, data=mock_wellborne_data)
+
+    mock_config_entry.add_to_hass(hass)
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN][mock_config_entry.entry_id] = coordinator
+
+    entities_added = []
+
+    def capture_entities(entities):
+        entities_added.extend(entities)
+
+    await async_setup_entry(hass, mock_config_entry, capture_entities)
+    await hass.async_block_till_done()
+
+    sensor = next((e for e in entities_added if e.entity_description.key == "connection_status"), None)
+    assert sensor is not None
+    assert sensor.native_value == status
+
+
+async def test_connection_status_sensor_available_without_data(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """Test connection_status sensor reports its value and stays available even when data is None."""
+    coordinator = _make_connection_status_coordinator("cloud_unreachable", data=None)
+
+    mock_config_entry.add_to_hass(hass)
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN][mock_config_entry.entry_id] = coordinator
+
+    entities_added = []
+
+    def capture_entities(entities):
+        entities_added.extend(entities)
+
+    await async_setup_entry(hass, mock_config_entry, capture_entities)
+    await hass.async_block_till_done()
+
+    sensor = next((e for e in entities_added if e.entity_description.key == "connection_status"), None)
+    assert sensor is not None
+    # Value comes from coordinator.connection_status, not coordinator.data
+    assert sensor.native_value == "cloud_unreachable"
+    # Must stay available even with no data (like charger_online)
+    assert sensor.available is True
 
 
 async def test_l2_l3_sensors_return_values_when_charging(

@@ -33,6 +33,29 @@ OFFLINE_POLL_INTERVAL: Final = 300  # seconds; backoff polling cadence while cha
 # (charger list ~30s + meter/config batch ~45s), so must exceed their aggregate worst case.
 COORDINATOR_UPDATE_TIMEOUT: Final = 60  # seconds
 
+# Live-data SSE listener (single persistent connection — ban-safe reconnect policy).
+# The vendor keeps exactly ONE long-lived connection; rapid reconnects get throttled
+# ("Requesting too often") then hard-fail. Reconnect only on drop with exponential backoff.
+#
+# These mirror the official app's `event-source-polyfill` defaults (reverse-engineered from
+# the bundled eventsource.js): heartbeatTimeout=45000ms, initialRetryDelayMillis=1000,
+# maxRetryDelayMillis=16000 (16x initial), exponential x2 per consecutive failure.
+SSE_READ_TIMEOUT: Final = 45  # seconds; polyfill heartbeatTimeout (no line in 45s -> dead)
+SSE_BACKOFF_BASE: Final = 1  # seconds; polyfill initialRetryDelayMillis (1000ms)
+SSE_BACKOFF_MAX: Final = 16  # seconds; polyfill maxRetryDelayMillis (16000ms)
+# ONE deliberate deviation from the app: on an explicit "Requesting too often" throttle frame
+# we back off far longer than the polyfill would (the app never self-throttles — it holds a
+# single long-lived connection). This protects against IP/account bans.
+SSE_THROTTLE_BACKOFF: Final = 120  # seconds; hard backoff after a "Requesting too often" throttle
+
+# Live-snapshot push policy: store the latest parsed frame on every event, but only notify
+# entities at most once per this interval so we don't churn the entity registry at ~1Hz.
+SSE_PUSH_THROTTLE: Final = 4  # seconds; min interval between entity updates from live frames
+# Live values are authoritative only while FRESH: a snapshot older than this is treated as
+# stale (charge ended / stream dropped) and sensors fall back to None/REST rather than showing
+# frozen live values.
+SSE_SNAPSHOT_FRESH: Final = 30  # seconds; max age a live snapshot is considered authoritative
+
 # Configuration keys
 CONF_EMAIL: Final = "email"
 CONF_PASSWORD: Final = "password"  # noqa: S105
@@ -41,6 +64,7 @@ CONF_END_OF_CHARGE_ENTITY: Final = "end_of_charge_entity"
 CONF_VEHICLE_EFFICIENCY: Final = "vehicle_efficiency"
 CONF_CHARGING_POLL_INTERVAL: Final = "charging_poll_interval"
 CONF_IDLE_POLL_INTERVAL: Final = "idle_poll_interval"
+CONF_ENABLE_LIVE_SSE: Final = "enable_live_sse"
 
 
 # API Endpoints
@@ -52,6 +76,10 @@ class Endpoints:
     LOGOUT: Final = "/v1/user/logout"
     REGISTER: Final = "/v1/user/register"
     SEND_EMAIL_CODE: Final = "/v1/user/sendEmailCode"
+    GET_USER_INFO: Final = "/v1/user/getInfo"
+
+    # Live data (Server-Sent Events)
+    EVENT_SOURCE_SUBSCRIBE: Final = "/v1/eventSource/subscribe"
 
     # Charger Management (v1)
     CHARGER_LIST: Final = "/v1/charger/chargerList"

@@ -7,7 +7,7 @@ export const cardStyles = css`
     --wb-primary: var(--primary-text-color, #e1e1e1);
     --wb-secondary: var(--secondary-text-color, #9b9b9b);
     --wb-divider: var(--divider-color, rgba(255, 255, 255, 0.12));
-    --wb-accent: var(--wellborne-charging-color, var(--energy-solar-color, #0f9d58));
+    --wb-accent: var(--wellborne-charging-color, #0f9d58);
     --wb-error: var(--error-color, #db4437);
     /* Subtle fill used by pill chips / stat tiles (Mushroom-style). */
     --wb-chip-bg: color-mix(in srgb, var(--wb-primary) 8%, transparent);
@@ -276,7 +276,10 @@ export const cardStyles = css`
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    margin-top: 10px;
+    margin-top: 8px;
+    background: var(--wb-chip-bg);
+    border-radius: 12px;
+    padding: 8px 12px;
   }
   .last-info {
     display: flex;

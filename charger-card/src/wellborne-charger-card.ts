@@ -79,6 +79,29 @@ export class WellborneChargerCard extends LitElement {
     return this._hass;
   }
   private _hass?: HomeAssistant;
+  private _tick?: ReturnType<typeof setInterval>;
+
+  public connectedCallback(): void {
+    super.connectedCallback();
+    // Tick the live session duration every second (the entity itself only pushes ~every 4s).
+    this._tick = setInterval(() => {
+      if (!this._hass || !this._config || this._cardState() !== 'charging') {
+        return;
+      }
+      const st = this._stateOf('session_duration');
+      if (typeof st?.attributes?.duration_seconds === 'number') {
+        this.requestUpdate();
+      }
+    }, 1000);
+  }
+
+  public disconnectedCallback(): void {
+    super.disconnectedCallback();
+    if (this._tick) {
+      clearInterval(this._tick);
+      this._tick = undefined;
+    }
+  }
 
   // ---------- data plumbing ----------
 
@@ -256,7 +279,7 @@ export class WellborneChargerCard extends LitElement {
     const offline = state === 'offline';
     const powerW = this._num('power');
     const kw = offline || powerW === null ? PLACEHOLDER : (powerW / 1000).toFixed(1);
-    const duration = offline ? PLACEHOLDER : this._formatDuration(this._num('session_duration'));
+    const duration = this._durationDisplay(state);
 
     return html`
       <div class="hero">
@@ -332,8 +355,17 @@ export class WellborneChargerCard extends LitElement {
     const offline = state === 'offline';
     const connected = this._bool('vehicle_connected');
     const current = offline ? null : this._num('current');
+    const maxCurrent = offline ? null : this._num('max_current');
+    const currentLabel =
+      current === null
+        ? PLACEHOLDER
+        : maxCurrent === null
+          ? `${current.toFixed(0)} A`
+          : `${current.toFixed(0)} / ${maxCurrent.toFixed(0)} A`;
     const energy = offline ? null : this._num('energy');
     const added = offline ? null : this._num('added_range');
+    // Live running cost of the active session (from the SSE `cost` field). Shown only when present.
+    const cost = offline ? null : this._num('session_cost');
 
     // vehicle_connected reads unknown when idle -> render — (never "disconnected").
     const connectedChip =
@@ -343,9 +375,12 @@ export class WellborneChargerCard extends LitElement {
 
     return html`
       <div class="chips">
-        ${connectedChip} ${this._chip('mdi:current-ac', current === null ? PLACEHOLDER : `${current.toFixed(0)} A`)}
+        ${connectedChip} ${this._chip('mdi:current-ac', currentLabel)}
         ${this._chip('mdi:lightning-bolt', energy === null ? PLACEHOLDER : `${energy.toFixed(1)} kWh`)}
         ${this._chip('mdi:map-marker-distance', added === null ? PLACEHOLDER : `+${Math.round(added)} km`)}
+        ${cost === null || this._hass === undefined
+          ? nothing
+          : this._chip('mdi:cash', formatCurrency(this._hass, this._config, cost))}
       </div>
     `;
   }
@@ -426,6 +461,42 @@ export class WellborneChargerCard extends LitElement {
     const h = Math.floor(minutes / 60);
     const m = Math.round(minutes % 60);
     return `${h}:${m.toString().padStart(2, '0')}`;
+  }
+
+  /**
+   * Live session duration as H:MM:SS (or M:SS under an hour). Prefers the integration's
+   * `duration_seconds` attribute (parsed from the charger's `charingTimeText`) and, while
+   * charging, extrapolates from the value's `last_updated` so it ticks every second between
+   * the ~4s entity pushes — capped so a stalled stream can't run the timer away. Falls back
+   * to the whole-minute sensor value when the attribute isn't present.
+   */
+  private _durationDisplay(state: CardState): string {
+    if (state === 'offline') {
+      return PLACEHOLDER;
+    }
+    const st = this._stateOf('session_duration');
+    const secs = st?.attributes?.duration_seconds;
+    if (typeof secs === 'number' && Number.isFinite(secs)) {
+      let total = secs;
+      if (state === 'charging' && st?.last_updated) {
+        const elapsed = (Date.now() - new Date(st.last_updated).getTime()) / 1000;
+        if (elapsed > 0 && elapsed < 15) {
+          total += elapsed;
+        }
+      }
+      return this._formatHMS(total);
+    }
+    return this._formatDuration(this._num('session_duration'));
+  }
+
+  private _formatHMS(totalSeconds: number): string {
+    const s = Math.max(0, Math.floor(totalSeconds));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    const mm = m.toString().padStart(2, '0');
+    const ss = sec.toString().padStart(2, '0');
+    return h > 0 ? `${h}:${mm}:${ss}` : `${m}:${ss}`;
   }
 
   private _fmtKwh(v: number): string {
