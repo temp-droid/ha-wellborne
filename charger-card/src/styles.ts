@@ -271,40 +271,27 @@ export const cardStyles = css`
     color: var(--wb-secondary);
     margin-left: 4px;
   }
+  /* Mirror the stat tiles: uppercase label (+ date) on top, bold value row below. */
   .last {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
+    flex-direction: column;
+    gap: 2px;
     margin-top: 8px;
     background: var(--wb-chip-bg);
     border-radius: 12px;
     padding: 8px 12px;
   }
-  .last-info {
+  .last-head {
     display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0;
+    align-items: baseline;
+    gap: 6px;
   }
   .last-label {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
     font-size: 0.68rem;
     font-weight: 600;
     letter-spacing: 0.04em;
     text-transform: uppercase;
     color: var(--wb-secondary);
-  }
-  .last-label ha-icon {
-    --mdc-icon-size: 14px;
-  }
-  .last-detail {
-    font-size: 0.9rem;
-    font-weight: 600;
-    color: var(--wb-primary);
-    font-variant-numeric: tabular-nums;
   }
   .last-when {
     font-size: 0.72rem;
@@ -312,23 +299,33 @@ export const cardStyles = css`
     opacity: 0.85;
     font-variant-numeric: tabular-nums;
   }
-  .last-cost {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    flex: none;
+  .last-when::before {
+    content: '·';
+    margin-right: 6px;
+    opacity: 0.6;
   }
-  .last-cost-value {
-    font-size: 1.25rem;
+  /* Value row matches .stat-value / .stat-unit exactly for cross-tile consistency. */
+  .last-detail {
+    font-size: 1.15rem;
     font-weight: 700;
-    color: var(--wb-accent);
-    font-variant-numeric: tabular-nums;
     line-height: 1.1;
+    color: var(--wb-primary);
+    font-variant-numeric: tabular-nums;
   }
-  .last-cost-caption {
-    font-size: 0.66rem;
+  .last-detail .metric {
+    white-space: nowrap;
+  }
+  .last-detail .unit {
+    font-size: 0.72rem;
+    font-weight: 500;
     color: var(--wb-secondary);
-    opacity: 0.85;
+    margin-left: 4px;
+  }
+  .last-detail .sep {
+    margin: 0 6px;
+    font-weight: 500;
+    color: var(--wb-secondary);
+    opacity: 0.55;
   }
 
   /* ----- SoC ring svg ----- */

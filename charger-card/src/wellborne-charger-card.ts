@@ -13,7 +13,7 @@ import {
 import type { EntityKey } from './const.js';
 import { resolveEntities } from './entity-resolver.js';
 import type { ResolvedEntities } from './entity-resolver.js';
-import { computeCost, formatCurrency, resolvePrice, sourceLabel } from './cost.js';
+import { computeCost, formatCurrency, resolvePrice } from './cost.js';
 import type { ResolvedPrice } from './cost.js';
 import { renderCurve } from './power-curve.js';
 import { renderSocRing } from './soc-ring.js';
@@ -426,38 +426,56 @@ export class WellborneChargerCard extends LitElement {
     const km = typeof attrs?.added_range === 'number' ? attrs.added_range : null;
     const when = this._formatWhen(attrs?.end_time);
 
-    const energyStr = energy === null ? PLACEHOLDER : `${this._fmtKwh(energy)} kWh`;
-    const parts = [energyStr, this._formatDuration(dur)];
+    // Same disposition as the stat tiles above: uppercase label (+ date) on top,
+    // a row of bold values with small muted units below. The cost is the last metric,
+    // styled like the others (accent-colored), and hidden when no price resolves.
+    const dp = this._durationParts(dur);
+    const metrics: TemplateResult[] = [
+      this._metric(energy === null ? PLACEHOLDER : this._fmtKwh(energy), energy === null ? '' : 'kWh'),
+      this._metric(dp.value, dp.unit),
+    ];
     if (km !== null && Number.isFinite(km)) {
-      parts.push(`+${Math.round(km)} km`);
+      metrics.push(this._metric(`+${Math.round(km)}`, 'km'));
     }
-    const detailStr = parts.join(' · ');
-
-    const info = html`
-      <div class="last-info">
-        <span class="last-label"><ha-icon icon="mdi:history"></ha-icon>Last charge</span>
-        <span class="last-detail">${detailStr}</span>
-        ${when === null ? nothing : html`<span class="last-when">${when}</span>`}
-      </div>
-    `;
-
-    // Cost block hidden entirely if no price resolves (never €0.00 / NaN).
     const cost = this._price === null ? null : computeCost(energy, this._price.price);
-    if (cost === null) {
-      return html`<div class="last">${info}</div>`;
+    if (cost !== null) {
+      metrics.push(this._metric(formatCurrency(this._hass!, this._config, cost), ''));
     }
 
-    const costStr = formatCurrency(this._hass!, this._config, cost);
-    const srcStr = sourceLabel(this._price!.source);
     return html`
       <div class="last">
-        ${info}
-        <div class="last-cost">
-          <span class="last-cost-value">~${costStr}</span>
-          <span class="last-cost-caption">est. · ${srcStr}</span>
+        <div class="last-head">
+          <span class="last-label">Last charge</span>
+          ${when === null ? nothing : html`<span class="last-when">${when}</span>`}
+        </div>
+        <div class="last-detail">
+          ${metrics.map((m, i) => html`${i > 0 ? html`<span class="sep">·</span>` : nothing}${m}`)}
         </div>
       </div>
     `;
+  }
+
+  /** A "value + small muted unit" pair, matching the stat-tile unit treatment. */
+  private _metric(value: string, unit: string): TemplateResult {
+    return html`<span class="metric"
+      >${value}${unit === '' ? nothing : html`<span class="unit">${unit}</span>`}</span
+    >`;
+  }
+
+  /**
+   * Split a duration (minutes) into a value + a calculated unit so it reads like the
+   * other metrics: under an hour → "45" + "min"; otherwise → "H:MM" + "h".
+   */
+  private _durationParts(minutes: number | null): { value: string; unit: string } {
+    if (minutes === null || !Number.isFinite(minutes) || minutes < 0) {
+      return { value: PLACEHOLDER, unit: '' };
+    }
+    if (minutes < 60) {
+      return { value: String(Math.round(minutes)), unit: 'min' };
+    }
+    const h = Math.floor(minutes / 60);
+    const m = Math.round(minutes % 60);
+    return { value: `${h}:${m.toString().padStart(2, '0')}`, unit: 'h' };
   }
 
   /** Format the last-session ISO end time as a short localized "Jun 2, 20:30". */
@@ -474,6 +492,7 @@ export class WellborneChargerCard extends LitElement {
       day: 'numeric',
       hour: '2-digit',
       minute: '2-digit',
+      hour12: false,
     }).format(d);
   }
 
