@@ -439,7 +439,8 @@ export class WellborneChargerCard extends LitElement {
     }
     const cost = this._price === null ? null : computeCost(energy, this._price.price);
     if (cost !== null) {
-      metrics.push(this._metric(formatCurrency(this._hass!, this._config, cost), ''));
+      const cp = this._costParts(cost);
+      metrics.push(this._metric(cp.value, cp.unit));
     }
 
     return html`
@@ -476,6 +477,30 @@ export class WellborneChargerCard extends LitElement {
     const h = Math.floor(minutes / 60);
     const m = Math.round(minutes % 60);
     return { value: `${h}:${m.toString().padStart(2, '0')}`, unit: 'h' };
+  }
+
+  /**
+   * Split a cost into a numeric value + the currency symbol as a trailing unit, so it
+   * reads like the other metrics ("16.23" + "€"). Uses formatToParts so the symbol and
+   * number separate correctly regardless of locale/currency placement.
+   */
+  private _costParts(cost: number): { value: string; unit: string } {
+    const currency = this._config.currency ?? this._hass!.config.currency ?? 'EUR';
+    try {
+      const parts = new Intl.NumberFormat(this._hass!.locale.language, {
+        style: 'currency',
+        currency,
+        currencyDisplay: 'narrowSymbol',
+      }).formatToParts(cost);
+      const unit = parts.find((p) => p.type === 'currency')?.value ?? currency;
+      const value = parts
+        .filter((p) => p.type !== 'currency' && p.type !== 'literal')
+        .map((p) => p.value)
+        .join('');
+      return { value, unit };
+    } catch {
+      return { value: cost.toFixed(2), unit: '€' };
+    }
   }
 
   /** Format the last-session ISO end time as a short localized "Jun 2, 20:30". */
