@@ -401,18 +401,28 @@ export class WellborneChargerCard extends LitElement {
   }
 
   private _renderTotals(): TemplateResult {
-    const month = this._num('monthly_energy');
-    const year = this._num('yearly_energy');
     return html`
       <div class="stats">
-        <div class="stat">
-          <span class="stat-label">This month</span>
-          <span class="stat-value">${month === null ? PLACEHOLDER : `${this._fmtKwh(month)}`}<span class="stat-unit">kWh</span></span>
-        </div>
-        <div class="stat">
-          <span class="stat-label">This year</span>
-          <span class="stat-value">${year === null ? PLACEHOLDER : `${this._fmtKwh(year)}`}<span class="stat-unit">kWh</span></span>
-        </div>
+        ${this._statTile('This month', this._num('monthly_energy'))}
+        ${this._statTile('This year', this._num('yearly_energy'))}
+      </div>
+    `;
+  }
+
+  /** A total tile: kWh headline + a muted derived-cost sub-line (energy × price). */
+  private _statTile(label: string, energy: number | null): TemplateResult {
+    const price = this._price?.price ?? null;
+    const cost = price !== null && energy !== null ? energy * price : null;
+    const cp = cost === null ? null : this._costParts(cost);
+    return html`
+      <div class="stat">
+        <span class="stat-label">${label}</span>
+        <span class="stat-value"
+          >${energy === null ? PLACEHOLDER : this._fmtKwh(energy)}<span class="stat-unit">kWh</span></span
+        >
+        ${cp === null
+          ? nothing
+          : html`<span class="stat-cost">${cp.value}<span class="stat-cost-unit">${cp.unit}</span></span>`}
       </div>
     `;
   }

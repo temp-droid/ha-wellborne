@@ -271,6 +271,20 @@ export const cardStyles = css`
     color: var(--wb-secondary);
     margin-left: 4px;
   }
+  /* Derived cost line under the kWh headline — muted so it stays secondary. */
+  .stat-cost {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--wb-secondary);
+    font-variant-numeric: tabular-nums;
+    margin-top: 1px;
+  }
+  .stat-cost-unit {
+    font-size: 0.66rem;
+    font-weight: 500;
+    margin-left: 3px;
+    opacity: 0.85;
+  }
   /* Mirror the stat tiles: uppercase label (+ date) on top, bold value row below. */
   .last {
     display: flex;
