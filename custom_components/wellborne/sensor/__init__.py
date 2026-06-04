@@ -143,6 +143,22 @@ def _get_last_session_duration(data: WellborneData) -> int | None:
     return data.last_session.duration_minutes
 
 
+def _parse_session_time(value: str) -> str | None:
+    """Parse the API's ``MM/DD YYYY HH:MM:SS`` session time to a naive ISO 8601 string.
+
+    The charger reports wall-clock time without a zone; we emit it tz-naive so the card
+    renders it verbatim (no offset shift). Returns None when absent or unparseable.
+    """
+    if not value or not value.strip():
+        return None
+    try:
+        # Intentionally tz-naive: the charger reports wall-clock time with no zone,
+        # and the card renders it verbatim (no offset conversion).
+        return datetime.strptime(value.strip(), "%m/%d %Y %H:%M:%S").isoformat()  # noqa: DTZ007
+    except ValueError:
+        return None
+
+
 def _get_monthly_energy(data: WellborneData) -> float | None:
     """Get total energy for current month."""
     if data.monthly_statistics is None:
@@ -547,15 +563,37 @@ class WellborneSensor(WellborneEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
-        """Expose the precise live session duration in seconds.
+        """Expose extra attributes the dashboard card reads.
 
-        The ``session_duration`` state stays in whole minutes (statistics/energy-dashboard
-        friendly), but the dashboard card reads ``duration_seconds`` (parsed live from the
-        charger's ``charingTimeText``) to display and tick ``H:MM:SS`` every second.
+        - ``session_duration`` → ``duration_seconds``: precise live seconds (the state stays
+          in whole minutes for statistics) so the card can tick ``H:MM:SS``.
+        - ``last_session_energy`` → ``end_time`` (ISO) and ``added_range`` (km): the previous
+          charge's finish time and derived range, for the card's "Last charge" block.
         """
-        if self.entity_description.key != "session_duration":
-            return None
-        snapshot = self.coordinator.live_snapshot
-        if snapshot is None or snapshot.duration_seconds is None:
-            return None
-        return {"duration_seconds": snapshot.duration_seconds}
+        key = self.entity_description.key
+
+        if key == "session_duration":
+            snapshot = self.coordinator.live_snapshot
+            if snapshot is None or snapshot.duration_seconds is None:
+                return None
+            return {"duration_seconds": snapshot.duration_seconds}
+
+        # Last-session block: surface the end timestamp and derived range (km) so the
+        # card can show "when" and "+km" for the previous charge without extra entities.
+        if key == "last_session_energy":
+            data = self.coordinator.data
+            if data is None or data.last_session is None:
+                return None
+            session = data.last_session
+            attrs: dict[str, Any] = {}
+            end_time = _parse_session_time(session.end_time)
+            if end_time is not None:
+                attrs["end_time"] = end_time
+            if session.energy:
+                efficiency = self.coordinator.config_entry.options.get(
+                    CONF_VEHICLE_EFFICIENCY, DEFAULT_VEHICLE_EFFICIENCY
+                )
+                attrs["added_range"] = round(session.energy * efficiency, 1)
+            return attrs or None
+
+        return None

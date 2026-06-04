@@ -420,36 +420,61 @@ export class WellborneChargerCard extends LitElement {
   private _renderLastCharge(): TemplateResult {
     const energy = this._num('last_session_energy');
     const dur = this._num('last_session_duration');
+    // Range (km) and finish time arrive as attributes on the last_session_energy
+    // entity; both are optional and silently skipped when absent.
+    const attrs = this._stateOf('last_session_energy')?.attributes;
+    const km = typeof attrs?.added_range === 'number' ? attrs.added_range : null;
+    const when = this._formatWhen(attrs?.end_time);
+
     const energyStr = energy === null ? PLACEHOLDER : `${this._fmtKwh(energy)} kWh`;
-    const detailStr = `${energyStr} · ${this._formatDuration(dur)}`;
-    const cost = this._price === null ? null : computeCost(energy, this._price.price);
+    const parts = [energyStr, this._formatDuration(dur)];
+    if (km !== null && Number.isFinite(km)) {
+      parts.push(`+${Math.round(km)} km`);
+    }
+    const detailStr = parts.join(' · ');
+
+    const info = html`
+      <div class="last-info">
+        <span class="last-label"><ha-icon icon="mdi:history"></ha-icon>Last charge</span>
+        <span class="last-detail">${detailStr}</span>
+        ${when === null ? nothing : html`<span class="last-when">${when}</span>`}
+      </div>
+    `;
 
     // Cost block hidden entirely if no price resolves (never €0.00 / NaN).
+    const cost = this._price === null ? null : computeCost(energy, this._price.price);
     if (cost === null) {
-      return html`
-        <div class="last">
-          <div class="last-info">
-            <span class="last-label"><ha-icon icon="mdi:history"></ha-icon>Last charge</span>
-            <span class="last-detail">${detailStr}</span>
-          </div>
-        </div>
-      `;
+      return html`<div class="last">${info}</div>`;
     }
 
     const costStr = formatCurrency(this._hass!, this._config, cost);
     const srcStr = sourceLabel(this._price!.source);
     return html`
       <div class="last">
-        <div class="last-info">
-          <span class="last-label"><ha-icon icon="mdi:history"></ha-icon>Last charge</span>
-          <span class="last-detail">${detailStr}</span>
-        </div>
+        ${info}
         <div class="last-cost">
           <span class="last-cost-value">~${costStr}</span>
           <span class="last-cost-caption">est. · ${srcStr}</span>
         </div>
       </div>
     `;
+  }
+
+  /** Format the last-session ISO end time as a short localized "Jun 2, 20:30". */
+  private _formatWhen(iso: unknown): string | null {
+    if (typeof iso !== 'string' || iso === '') {
+      return null;
+    }
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) {
+      return null;
+    }
+    return new Intl.DateTimeFormat(this._hass!.locale.language, {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(d);
   }
 
   // ---------- helpers ----------

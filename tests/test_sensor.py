@@ -19,7 +19,7 @@ from homeassistant.core import HomeAssistant
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.wellborne.api import WifiInfo
+from custom_components.wellborne.api import LastSessionData, WifiInfo
 from custom_components.wellborne.api.sse import SseLiveSnapshot
 from custom_components.wellborne.const import DOMAIN
 from custom_components.wellborne.sensor import async_setup_entry
@@ -548,6 +548,56 @@ async def test_added_range_sensor_calculates_km_from_energy(
     assert added_range_sensor.native_value == 63.0
     assert added_range_sensor.device_class == SensorDeviceClass.DISTANCE
     assert added_range_sensor.native_unit_of_measurement == "km"
+
+
+async def test_last_session_energy_exposes_end_time_and_range(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_coordinator,
+) -> None:
+    """last_session_energy surfaces end_time (ISO) and derived range (km) as attributes."""
+    mock_config_entry.add_to_hass(hass)
+    mock_coordinator.data.last_session = LastSessionData(
+        energy=20.0,
+        duration_minutes=120,
+        start_time="06/02 2026 18:00:00",
+        end_time="06/02 2026 20:30:00",
+    )
+
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN][mock_config_entry.entry_id] = mock_coordinator
+
+    entities_added = []
+    await async_setup_entry(hass, mock_config_entry, entities_added.extend)
+    await hass.async_block_till_done()
+
+    sensor = next(e for e in entities_added if e.unique_id.endswith("_last_session_energy"))
+    attrs = sensor.extra_state_attributes
+    assert attrs is not None
+    # tz-naive ISO so the card renders the charger's wall-clock verbatim.
+    assert attrs["end_time"] == "2026-06-02T20:30:00"
+    # 20 kWh * default 6 km/kWh = 120 km.
+    assert attrs["added_range"] == 120.0
+
+
+async def test_last_session_energy_attributes_none_without_session(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_coordinator,
+) -> None:
+    """No last session -> no extra attributes (never partial/garbage)."""
+    mock_config_entry.add_to_hass(hass)
+    mock_coordinator.data.last_session = None
+
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN][mock_config_entry.entry_id] = mock_coordinator
+
+    entities_added = []
+    await async_setup_entry(hass, mock_config_entry, entities_added.extend)
+    await hass.async_block_till_done()
+
+    sensor = next(e for e in entities_added if e.unique_id.endswith("_last_session_energy"))
+    assert sensor.extra_state_attributes is None
 
 
 async def test_added_range_sensor_none_when_not_charging(

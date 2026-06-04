@@ -306,6 +306,12 @@ export const cardStyles = css`
     color: var(--wb-primary);
     font-variant-numeric: tabular-nums;
   }
+  .last-when {
+    font-size: 0.72rem;
+    color: var(--wb-secondary);
+    opacity: 0.85;
+    font-variant-numeric: tabular-nums;
+  }
   .last-cost {
     display: flex;
     flex-direction: column;
