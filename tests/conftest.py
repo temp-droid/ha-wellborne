@@ -443,10 +443,11 @@ def mock_wellborne_data_with_delayed_charging(
 
 @pytest.fixture
 def mock_coordinator_with_delayed_charging(mock_wellborne_data_with_delayed_charging):
-    """Create a mock coordinator with delayed charging enabled."""
+    """Create a mock coordinator with delayed charging enabled (no live snapshot)."""
     coordinator = MagicMock()
     coordinator.data = mock_wellborne_data_with_delayed_charging
     coordinator.charger_id = TEST_CHARGER_ID
     coordinator.last_update_success = True
+    coordinator.live_snapshot = None
     type(coordinator).available = PropertyMock(return_value=True)
     return coordinator

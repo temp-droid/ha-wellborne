@@ -147,12 +147,23 @@
       "session_duration": {
         "name": "Session Duration"
       },
+      "session_cost": {
+        "name": "Session Cost"
+      },
       "status": {
         "name": "Status",
         "state": {
           "idle": "Idle",
           "charging": "Charging",
           "pending": "Pending"
+        }
+      },
+      "connection_status": {
+        "name": "Connection Status",
+        "state": {
+          "online": "Online",
+          "charger_offline": "Charger offline",
+          "cloud_unreachable": "Cloud unreachable"
         }
       },
       "added_range": {

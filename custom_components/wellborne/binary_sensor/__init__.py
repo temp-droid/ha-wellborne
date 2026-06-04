@@ -94,6 +94,14 @@ class WellborneBinarySensor(WellborneEntity, BinarySensorEntity):
         if self.entity_description.key == "charger_online":
             return self.coordinator.is_online
 
+        # A fresh connected SSE snapshot is the authoritative real-time state for charging and
+        # plug status: it flips these chips instantly instead of waiting ~120s for the REST poll.
+        # live_snapshot only returns a value when fresh AND connected (status>=3, cable engaged),
+        # and a connected snapshot still counts even when power_w is 0 (plugged, not yet drawing).
+        snapshot = self.coordinator.live_snapshot
+        if snapshot is not None and self.entity_description.key in ("charging", "vehicle_connected"):
+            return True
+
         if self.coordinator.data is None:
             return None
 

@@ -19,15 +19,18 @@ from custom_components.wellborne.api import (
     WellborneData,
     WellborneError,
 )
+from custom_components.wellborne.api.sse import parse_sse_obj
 from custom_components.wellborne.const import (
     CHARGING_POLL_INTERVAL,
     DOMAIN,
     IDLE_POLL_INTERVAL,
     OFFLINE_POLL_INTERVAL,
     OFFLINE_TIMEOUT_COUNT,
+    SSE_SNAPSHOT_FRESH,
 )
 from custom_components.wellborne.coordinator import WellborneDataUpdateCoordinator
 
+from .api.test_sse import CHARGING_OBJ, IDLE_OBJ
 from .conftest import TEST_CHARGER_ID
 
 
@@ -955,3 +958,142 @@ async def test_charger_offline_restores_online_after_success(
     assert result is mock_wellborne_data
     assert coordinator.is_online is True
     assert coordinator._consecutive_timeouts == 0
+
+
+# =============================================================================
+# Connection Status (diagnostic enum) Tests
+# =============================================================================
+
+
+async def test_connection_status_online_by_default(
+    hass: HomeAssistant,
+    mock_api_client_local,
+    coordinator: WellborneDataUpdateCoordinator,
+) -> None:
+    """Test connection_status starts as 'online' before any fetch."""
+    assert coordinator.connection_status == "online"
+
+
+async def test_connection_status_online_after_success(
+    hass: HomeAssistant,
+    mock_api_client_local,
+    coordinator: WellborneDataUpdateCoordinator,
+    mock_wellborne_data: WellborneData,
+) -> None:
+    """Test connection_status is 'online' after a successful fetch."""
+    mock_api_client_local.async_get_charger_data.return_value = mock_wellborne_data
+
+    await coordinator._async_update_data()
+
+    assert coordinator.connection_status == "online"
+
+
+async def test_connection_status_charger_offline_on_charger_offline_error(
+    hass: HomeAssistant,
+    mock_api_client_local,
+    coordinator: WellborneDataUpdateCoordinator,
+) -> None:
+    """Test connection_status is 'charger_offline' after a ChargerOfflineError."""
+    mock_api_client_local.async_get_charger_data.side_effect = ChargerOfflineError("Charger is not online")
+
+    with pytest.raises(UpdateFailed):
+        await coordinator._async_update_data()
+
+    assert coordinator.connection_status == "charger_offline"
+
+
+async def test_connection_status_cloud_unreachable_on_connection_error(
+    hass: HomeAssistant,
+    mock_api_client_local,
+    coordinator: WellborneDataUpdateCoordinator,
+) -> None:
+    """Test connection_status is 'cloud_unreachable' after an ApiConnectionError."""
+    mock_api_client_local.async_get_charger_data.side_effect = ApiConnectionError("Connection refused")
+
+    with pytest.raises(UpdateFailed):
+        await coordinator._async_update_data()
+
+    assert coordinator.connection_status == "cloud_unreachable"
+
+
+async def test_connection_status_cloud_unreachable_on_timeout(
+    hass: HomeAssistant,
+    mock_api_client_local,
+    coordinator: WellborneDataUpdateCoordinator,
+) -> None:
+    """Test connection_status is 'cloud_unreachable' after a TimeoutError."""
+    mock_api_client_local.async_get_charger_data.side_effect = TimeoutError()
+
+    with pytest.raises(UpdateFailed):
+        await coordinator._async_update_data()
+
+    assert coordinator.connection_status == "cloud_unreachable"
+
+
+async def test_connection_status_returns_to_online_after_recovery(
+    hass: HomeAssistant,
+    mock_api_client_local,
+    coordinator: WellborneDataUpdateCoordinator,
+    mock_wellborne_data: WellborneData,
+) -> None:
+    """Test connection_status returns to 'online' after a failure then a successful fetch."""
+    mock_api_client_local.async_get_charger_data.side_effect = ApiConnectionError("boom")
+
+    with pytest.raises(UpdateFailed):
+        await coordinator._async_update_data()
+
+    assert coordinator.connection_status == "cloud_unreachable"
+
+    mock_api_client_local.async_get_charger_data.side_effect = None
+    mock_api_client_local.async_get_charger_data.return_value = mock_wellborne_data
+
+    await coordinator._async_update_data()
+
+    assert coordinator.connection_status == "online"
+
+
+# =============================================================================
+# Live SSE snapshot: store + freshness gate
+# =============================================================================
+
+
+async def test_live_snapshot_fresh_when_connected_and_recent(
+    hass: HomeAssistant,
+    coordinator: WellborneDataUpdateCoordinator,
+) -> None:
+    """A recently stored, connected snapshot is exposed as the live snapshot."""
+    clock = {"t": 500.0}
+    coordinator._live_monotonic = lambda: clock["t"]
+    snap = parse_sse_obj(CHARGING_OBJ)
+
+    coordinator.update_live_snapshot(snap)
+
+    assert coordinator.live_snapshot is snap
+
+
+async def test_live_snapshot_stale_when_old(
+    hass: HomeAssistant,
+    coordinator: WellborneDataUpdateCoordinator,
+) -> None:
+    """A snapshot older than the freshness window is treated as stale (None)."""
+    clock = {"t": 500.0}
+    coordinator._live_monotonic = lambda: clock["t"]
+    snap = parse_sse_obj(CHARGING_OBJ)
+    coordinator.update_live_snapshot(snap)
+
+    # Advance past the freshness window.
+    clock["t"] += SSE_SNAPSHOT_FRESH + 1
+    assert coordinator.live_snapshot is None
+
+
+async def test_live_snapshot_none_when_idle(
+    hass: HomeAssistant,
+    coordinator: WellborneDataUpdateCoordinator,
+) -> None:
+    """An idle (not connected) snapshot is never exposed as live, even if fresh."""
+    clock = {"t": 500.0}
+    coordinator._live_monotonic = lambda: clock["t"]
+    snap = parse_sse_obj(IDLE_OBJ)
+    coordinator.update_live_snapshot(snap)
+
+    assert coordinator.live_snapshot is None

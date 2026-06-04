@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import timedelta
 import logging
+import time
 from typing import TYPE_CHECKING
 
 from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
@@ -32,11 +33,15 @@ from ..const import (
     IDLE_POLL_INTERVAL,
     OFFLINE_POLL_INTERVAL,
     OFFLINE_TIMEOUT_COUNT,
+    SSE_PUSH_THROTTLE,
+    SSE_SNAPSHOT_FRESH,
 )
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant
+
+    from ..api.sse import SseLiveSnapshot
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -73,8 +78,20 @@ class WellborneDataUpdateCoordinator(DataUpdateCoordinator[WellborneData]):
         self._consecutive_timeouts = 0
         self._is_online = True
 
+        # Connection status classification: distinguishes the two offline failure modes.
+        # One of "online", "charger_offline" (vendor cloud reachable, charger lost uplink)
+        # or "cloud_unreachable" (transport-level failure reaching the vendor cloud).
+        self._connection_status = "online"
+
         # Conditional logging state: track endpoints with recent failures
         self._endpoint_failure_counts: dict[str, int] = {}
+
+        # Live SSE snapshot state. The latest parsed frame is stored on EVERY push (so freshness
+        # is accurate) but entity listeners are notified at most once per SSE_PUSH_THROTTLE.
+        self._live_snapshot: SseLiveSnapshot | None = None
+        self._live_snapshot_at: float | None = None  # monotonic time the snapshot was stored
+        self._live_pushed_at: float | None = None  # monotonic time of the last listener notify
+        self._live_monotonic = time.monotonic  # injectable clock for tests
 
     @property
     def client(self) -> WellborneApiClient:
@@ -90,6 +107,47 @@ class WellborneDataUpdateCoordinator(DataUpdateCoordinator[WellborneData]):
     def is_online(self) -> bool:
         """Return True if the charger is considered online."""
         return self._is_online
+
+    @property
+    def connection_status(self) -> str:
+        """Return the connection status: online, charger_offline, or cloud_unreachable.
+
+        Classifies the most recent fetch outcome so a dashboard can distinguish the charger
+        losing its uplink ("charger_offline") from HA being unable to reach the vendor cloud
+        ("cloud_unreachable"). Returns to "online" after a successful fetch.
+        """
+        return self._connection_status
+
+    @property
+    def live_snapshot(self) -> SseLiveSnapshot | None:
+        """Return the live SSE snapshot while it is authoritative, else None.
+
+        A snapshot is authoritative only while FRESH (stored less than SSE_SNAPSHOT_FRESH seconds
+        ago) AND ``connected`` (charge in progress). When stale or idle, return None so sensors
+        fall back to None rather than showing frozen live values.
+        """
+        snapshot = self._live_snapshot
+        if snapshot is None or self._live_snapshot_at is None or not snapshot.connected:
+            return None
+        if self._live_monotonic() - self._live_snapshot_at >= SSE_SNAPSHOT_FRESH:
+            return None
+        return snapshot
+
+    def update_live_snapshot(self, snapshot: SseLiveSnapshot) -> None:
+        """Store a freshly parsed live snapshot and notify entities (throttled).
+
+        The latest snapshot is stored on every call so freshness tracking is exact, but listener
+        notifications are throttled to once per SSE_PUSH_THROTTLE seconds to avoid churning
+        entities at the ~1Hz frame rate.
+        """
+        now = self._live_monotonic()
+        self._live_snapshot = snapshot
+        self._live_snapshot_at = now
+
+        if self._live_pushed_at is not None and now - self._live_pushed_at < SSE_PUSH_THROTTLE:
+            return
+        self._live_pushed_at = now
+        self.async_update_listeners()
 
     def _log_failure(self, endpoint: str, message: str, exc: Exception | None = None) -> None:
         """Log a failure with conditional warning/debug based on repeat count.
@@ -141,6 +199,7 @@ class WellborneDataUpdateCoordinator(DataUpdateCoordinator[WellborneData]):
                 _LOGGER.info("Connection restored after %d timeouts", self._consecutive_timeouts)
             self._consecutive_timeouts = 0
             self._is_online = True
+            self._connection_status = "online"
             self._log_success("charger_data")
 
             # Adaptive polling: adjust interval based on charging state
@@ -171,6 +230,9 @@ class WellborneDataUpdateCoordinator(DataUpdateCoordinator[WellborneData]):
         otherwise raises UpdateFailed with the same messages as the prior implementation.
         """
         self._consecutive_timeouts += 1
+        # Classify which failure mode caused this: a charger that lost its uplink
+        # (ChargerOfflineError) versus a transport-level failure reaching the cloud.
+        self._connection_status = "charger_offline" if isinstance(err, ChargerOfflineError) else "cloud_unreachable"
         self._log_failure("charger_data", f"Charger unreachable (failure #{self._consecutive_timeouts})", err)
 
         if self._consecutive_timeouts >= OFFLINE_TIMEOUT_COUNT:

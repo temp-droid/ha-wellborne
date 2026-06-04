@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorEntityDescription, SensorStateClass
 from homeassistant.const import (
+    EntityCategory,
     UnitOfElectricCurrent,
     UnitOfElectricPotential,
     UnitOfEnergy,
@@ -16,6 +17,7 @@ from homeassistant.const import (
     UnitOfPower,
     UnitOfTime,
 )
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from ..api import WellborneData
@@ -110,14 +112,6 @@ def _get_max_current(data: WellborneData) -> float | None:
     return data.status.max_current
 
 
-def _get_session_duration(data: WellborneData) -> int | None:
-    """Get session duration in minutes."""
-    if data.session_start_time is None:
-        return None
-    duration = datetime.now(tz=UTC) - data.session_start_time
-    return int(duration.total_seconds() / 60)
-
-
 def _get_charger_status(data: WellborneData) -> str:
     """Get charger status as a text state."""
     if data.status.is_charging:
@@ -129,6 +123,10 @@ def _get_charger_status(data: WellborneData) -> str:
 
 # Status options for enum sensor
 CHARGER_STATUS_OPTIONS = ["idle", "charging", "pending"]
+
+# Connection status options for the diagnostic enum sensor (order matters; a frontend
+# card depends on these exact literals).
+CONNECTION_STATUS_OPTIONS = ["online", "charger_offline", "cloud_unreachable"]
 
 
 def _get_last_session_energy(data: WellborneData) -> float | None:
@@ -143,6 +141,22 @@ def _get_last_session_duration(data: WellborneData) -> int | None:
     if data.last_session is None:
         return None
     return data.last_session.duration_minutes
+
+
+def _parse_session_time(value: str) -> str | None:
+    """Parse the API's ``MM/DD YYYY HH:MM:SS`` session time to a naive ISO 8601 string.
+
+    The charger reports wall-clock time without a zone; we emit it tz-naive so the card
+    renders it verbatim (no offset shift). Returns None when absent or unparseable.
+    """
+    if not value or not value.strip():
+        return None
+    try:
+        # Intentionally tz-naive: the charger reports wall-clock time with no zone,
+        # and the card renders it verbatim (no offset conversion).
+        return datetime.strptime(value.strip(), "%m/%d %Y %H:%M:%S").isoformat()  # noqa: DTZ007
+    except ValueError:
+        return None
 
 
 def _get_monthly_energy(data: WellborneData) -> float | None:
@@ -216,6 +230,23 @@ def _get_ext_meter_power(data: WellborneData) -> float | None:
     return data.load_balancing.external_meter.power
 
 
+# Maps a sensor key to the live SSE snapshot attribute it should read while a fresh snapshot is
+# available. These are the only sensors fed by the live stream; everything else stays on REST.
+# `added_range` derives from session energy (handled with the efficiency multiplier separately).
+_LIVE_SNAPSHOT_FIELDS: dict[str, str] = {
+    "power": "power_w",
+    "current": "current_l1",
+    "current_l2": "current_l2",
+    "current_l3": "current_l3",
+    "voltage": "voltage_l1",
+    "voltage_l2": "voltage_l2",
+    "voltage_l3": "voltage_l3",
+    "energy": "energy_kwh",
+    "session_duration": "duration_minutes",
+    "session_cost": "cost",
+}
+
+
 SENSOR_DESCRIPTIONS: tuple[WellborneSensorEntityDescription, ...] = (
     WellborneSensorEntityDescription(
         key="power",
@@ -232,6 +263,15 @@ SENSOR_DESCRIPTIONS: tuple[WellborneSensorEntityDescription, ...] = (
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         state_class=SensorStateClass.TOTAL_INCREASING,
         value_fn=_get_energy,
+    ),
+    WellborneSensorEntityDescription(
+        key="session_cost",
+        translation_key="session_cost",
+        # Live-only via the SSE snapshot (the cloud reports the running session cost in EUR).
+        # Plain sensor (no monetary device_class) to avoid currency-unit validation; the card
+        # formats it. No REST source, so the value_fn fallback is a no-op.
+        native_unit_of_measurement="€",
+        value_fn=lambda _data: None,
     ),
     WellborneSensorEntityDescription(
         key="voltage",
@@ -299,7 +339,10 @@ SENSOR_DESCRIPTIONS: tuple[WellborneSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.DURATION,
         native_unit_of_measurement=UnitOfTime.MINUTES,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=_get_session_duration,
+        # Live value resolved from the SSE snapshot's charingTimeText in native_value; this
+        # fallback intentionally returns None (replaces the old now - session_start_time logic
+        # that produced bogus durations, e.g. 177h, from a stale session_start_time).
+        value_fn=lambda _data: None,
     ),
     WellborneSensorEntityDescription(
         key="status",
@@ -307,6 +350,17 @@ SENSOR_DESCRIPTIONS: tuple[WellborneSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.ENUM,
         options=CHARGER_STATUS_OPTIONS,
         value_fn=_get_charger_status,
+    ),
+    # Diagnostic enum: distinguishes the two charger-unreachable failure modes.
+    # Value comes from coordinator.connection_status (special handling in
+    # WellborneSensor), not coordinator.data, so it reports even when data is None.
+    WellborneSensorEntityDescription(
+        key="connection_status",
+        translation_key="connection_status",
+        device_class=SensorDeviceClass.ENUM,
+        options=CONNECTION_STATUS_OPTIONS,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda _data: None,
     ),
     # Note: added_range uses special handling in WellborneSensor for configurable efficiency
     WellborneSensorEntityDescription(
@@ -457,18 +511,89 @@ class WellborneSensor(WellborneEntity, SensorEntity):
         return self.entity_description.last_reset_fn()
 
     @property
-    def native_value(self) -> float | int | str | None:
-        """Return the sensor value."""
-        if self.coordinator.data is None:
-            return None
+    def available(self) -> bool:
+        """Return True if entity is available."""
+        # connection_status reports the coordinator's connection state and must stay
+        # available even when coordinator.data is None (like the charger_online sensor).
+        if self.entity_description.key == "connection_status":
+            return CoordinatorEntity.available.fget(self)
+        return super().available
 
-        # Special handling for added_range to use configurable efficiency
-        if self.entity_description.key == "added_range":
-            energy = self.entity_description.value_fn(self.coordinator.data)
+    @property
+    def native_value(self) -> float | int | str | None:
+        """Return the sensor value.
+
+        Live sensors (power, per-phase current/voltage, session energy, session duration and the
+        derived added range) read from the coordinator's live SSE snapshot while it is fresh, and
+        report None otherwise — never the stale REST live values that produced bogus readings.
+        Non-live sensors (statistics, last session, status, etc.) stay on coordinator.data.
+        """
+        key = self.entity_description.key
+
+        # Special handling for connection_status - doesn't depend on coordinator.data
+        if key == "connection_status":
+            return self.coordinator.connection_status
+
+        snapshot = self.coordinator.live_snapshot
+
+        # A fresh connected snapshot means a live session is active: the status is "charging"
+        # regardless of the slow REST status (which lags ~120s). live_snapshot only returns a
+        # value when fresh AND connected, so its presence is the authoritative signal.
+        if key == "status" and snapshot is not None:
+            return "charging"
+
+        # added_range derives from live session energy with a configurable efficiency.
+        if key == "added_range":
+            energy = snapshot.energy_kwh if snapshot is not None else None
             if energy is None:
                 return None
-            # Get efficiency from options, default to 6.0 km/kWh
             efficiency = self.coordinator.config_entry.options.get(CONF_VEHICLE_EFFICIENCY, DEFAULT_VEHICLE_EFFICIENCY)
             return round(energy * efficiency, 1)
 
+        # Live sensors: snapshot when fresh, else None (do not fall back to stale REST values).
+        if key in _LIVE_SNAPSHOT_FIELDS:
+            if snapshot is None:
+                return None
+            return getattr(snapshot, _LIVE_SNAPSHOT_FIELDS[key])
+
+        if self.coordinator.data is None:
+            return None
+
         return self.entity_description.value_fn(self.coordinator.data)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Expose extra attributes the dashboard card reads.
+
+        - ``session_duration`` → ``duration_seconds``: precise live seconds (the state stays
+          in whole minutes for statistics) so the card can tick ``H:MM:SS``.
+        - ``last_session_energy`` → ``end_time`` (ISO) and ``added_range`` (km): the previous
+          charge's finish time and derived range, for the card's "Last charge" block.
+        """
+        key = self.entity_description.key
+
+        if key == "session_duration":
+            snapshot = self.coordinator.live_snapshot
+            if snapshot is None or snapshot.duration_seconds is None:
+                return None
+            return {"duration_seconds": snapshot.duration_seconds}
+
+        # Last-session block: surface the end timestamp and derived range (km) so the
+        # card can show "when" and "+km" for the previous charge without extra entities.
+        if key == "last_session_energy":
+            data = self.coordinator.data
+            if data is None or data.last_session is None:
+                return None
+            session = data.last_session
+            attrs: dict[str, Any] = {}
+            end_time = _parse_session_time(session.end_time)
+            if end_time is not None:
+                attrs["end_time"] = end_time
+            if session.energy:
+                efficiency = self.coordinator.config_entry.options.get(
+                    CONF_VEHICLE_EFFICIENCY, DEFAULT_VEHICLE_EFFICIENCY
+                )
+                attrs["added_range"] = round(session.energy * efficiency, 1)
+            return attrs or None
+
+        return None

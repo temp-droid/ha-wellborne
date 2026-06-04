@@ -1,0 +1,71 @@
+# ---------------------------------------------------------------------------
+# CREG Wallonia EV price sensor for the Wellborne Charger Card (`price_entity`)
+# ---------------------------------------------------------------------------
+# CREG publishes an all-in residential €/kWh price per Belgian region, quarterly,
+# as a plain CSV that is literally designed for EV home-charging reimbursement:
+#
+#   https://www.creg.be/sites/default/files/assets/Prices/CREG_Tariff_EV.csv
+#
+# "All-in" = energy + transport + distribution + taxes/levies + VAT.
+# DO NOT add grid fees or VAT on top — it is already included.
+#
+# CSV quirks handled below:
+#   * semicolon (;) delimiter
+#   * comma (,) decimal separator
+#   * UTF-8 BOM on the first byte
+#   * the "Average 3 months" column is sparse (only the first month of a quarter)
+#   * values are in c€/kWh -> we divide by 100 to get €/kWh
+#
+# We grab the LATEST non-empty Wallonia "Average 3 months" value. Polls daily.
+# Fails soft: command_line keeps the previous value if the URL 404s.
+#
+# Add this under `sensor:` in configuration.yaml (or a !include package).
+# After a config reload, set in the card:  price_entity: sensor.wallonia_ev_price
+# ---------------------------------------------------------------------------
+
+command_line:
+  - sensor:
+      name: Wallonia EV Price
+      unique_id: wallonia_ev_price
+      unit_of_measurement: "€/kWh"
+      device_class: monetary
+      scan_interval: 86400 # once per day
+      # The python one-liner is dependency-free (stdlib only) and:
+      #   1. downloads the CSV (curl, silent, follow redirects),
+      #   2. strips the UTF-8 BOM,
+      #   3. splits on ';' ,
+      #   4. finds the Wallonia row + the "Average 3 months" column,
+      #   5. keeps the LAST non-empty cell, converts "37,83" -> 0.3783.
+      command: >-
+        curl -sL --max-time 30
+        https://www.creg.be/sites/default/files/assets/Prices/CREG_Tariff_EV.csv
+        | python3 -c "import sys;
+        rows=[r.lstrip('﻿').rstrip('\n').split(';') for r in sys.stdin if r.strip()];
+        hdr=rows[0];
+        ci=[i for i,c in enumerate(hdr) if 'average' in c.lower() and '3' in c];
+        col=ci[0] if ci else len(hdr)-1;
+        data=[r for r in rows[1:] if any('wallon' in c.lower() for c in r)];
+        vals=[r[col].strip() for r in data if len(r)>col and r[col].strip()];
+        v=vals[-1] if vals else '';
+        print(round(float(v.replace(',','.'))/100,4) if v else '')"
+      value_template: "{{ value | float(None) }}"
+      availability: "{{ value not in ['', 'None', 'unknown', 'unavailable'] }}"
+
+# ---------------------------------------------------------------------------
+# ALTERNATIVE (dependency-averse): an input_number you bump 4×/year.
+# ---------------------------------------------------------------------------
+# If you would rather not curl a CSV, create a helper and edit it quarterly when
+# CREG publishes a new "Average 3 months" figure (Wallonia Q2-2026 = 0.3783 €/kWh):
+#
+# input_number:
+#   wallonia_ev_price:
+#     name: Wallonia EV Price
+#     min: 0
+#     max: 2
+#     step: 0.0001
+#     unit_of_measurement: "€/kWh"
+#     mode: box
+#
+# Then in the card:  price_entity: input_number.wallonia_ev_price
+# (Or skip a price_entity entirely and set a static `price: 0.3783` in the card.)
+# ---------------------------------------------------------------------------
